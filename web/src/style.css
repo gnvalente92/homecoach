@@ -105,3 +105,15 @@ button.link { border: 0; background: none; color: var(--accent); cursor: pointer
 .countdown { text-align: center; } .countdown b { display: block; font-size: 44px; line-height: 1; font-variant-numeric: tabular-nums; } .countdown span { color: var(--muted); font-size: 13px; }
 .delta { font-size: 12px; color: var(--muted); } .delta.up { color: var(--good); } .delta.down { color: var(--poor); }
 .theme { border: 1px solid var(--line); background: none; color: var(--muted); border-radius: 99px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+
+/* race assistant */
+.chat-log { display: grid; gap: 10px; max-height: 26rem; overflow: auto; padding: 4px 2px 12px; }
+.msg { display: grid; gap: 8px; } .msg.user { justify-items: end; }
+.bubble { max-width: 80ch; padding: 9px 13px; border-radius: 14px; background: var(--panel-2); white-space: pre-wrap; font-size: 14px; }
+.msg.user .bubble { background: var(--accent); color: #fff; }
+.proposal { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+  border: 1px solid var(--line); border-left: 3px solid var(--good); border-radius: 10px; padding: 10px 14px; max-width: 640px; }
+.proposal a, .sources a { color: var(--accent); }
+.sources { font-size: 12px; color: var(--muted); }
+.chat-form { display: flex; gap: 8px; } .chat-form input { flex: 1; }
+button:disabled { opacity: .6; cursor: default; }

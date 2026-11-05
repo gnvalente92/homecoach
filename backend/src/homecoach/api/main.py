@@ -329,6 +329,37 @@ def delete_race(race_id: int, db: Session = Db) -> None:
     db.delete(r)
 
 
+# ---- race assistant -----------------------------------------------------------------------------
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4000)
+
+
+class ChatBody(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=30)
+
+
+@app.get("/api/assistant")
+def assistant_status() -> dict:
+    s = get_settings()
+    return {"enabled": bool(s.anthropic_api_key), "model": s.assistant_model}
+
+
+@app.post("/api/assistant/chat")
+def assistant_chat(body: ChatBody, db: Session = Db) -> dict:
+    from homecoach.assistant import AssistantError, chat
+
+    if body.messages[-1].role != "user":
+        raise HTTPException(422, "the last message must be from the user")
+    races = [race_out(r) for r in db.scalars(select(Race).where(Race.day >= today()).order_by(Race.day))]
+    try:
+        return jsonable(chat(get_settings(), [m.model_dump() for m in body.messages], today(), races))
+    except AssistantError as e:
+        raise HTTPException(503, str(e)) from e
+
+
 # ---- plan ---------------------------------------------------------------------------------------
 
 

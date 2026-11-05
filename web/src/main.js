@@ -221,8 +221,59 @@ async function plan() {
   }
 }
 
+// ---- race assistant chat ----
+state.chat = state.chat || [];
+function assistantCard(list, status) {
+  const log = h('div', { class: 'chat-log' });
+  const fmtGoal = (g) => g || '—';
+  const proposalCard = (p) => {
+    const existing = p.race_id ? list.find((r) => r.id === p.race_id) : null;
+    const btn = h('button', { class: 'primary', onclick: async () => {
+      btn.disabled = true;
+      try {
+        const body = { name: p.name, date: p.date, distance_km: Number(p.distance_km), goal_time: p.goal_time || null, priority: p.priority || 'A',
+          notes: [p.location, p.start_time && `start ${p.start_time}`, p.notes, p.source_url].filter(Boolean).join(' · ') || null };
+        await api(existing ? `/races/${existing.id}` : '/races', { method: existing ? 'PUT' : 'POST', body: JSON.stringify(body) });
+        p.saved = true; resetCache(); races();
+      } catch (e) { btn.disabled = false; btn.textContent = `Failed: ${e.message}`; }
+    } }, p.saved ? 'Saved ✓' : existing ? 'Update race' : 'Add to calendar');
+    if (p.saved) btn.disabled = true;
+    return h('div', { class: 'proposal' },
+      h('div', {}, h('div', { class: 'next-name' }, p.name),
+        h('div', { class: 'note', style: 'margin:2px 0' }, `${d3.utcFormat('%a %b %-d, %Y')(parse(p.date))} · ${+Number(p.distance_km).toFixed(2)} km · goal ${fmtGoal(p.goal_time)} · priority ${p.priority}`),
+        p.location || p.start_time ? h('div', { class: 'note', style: 'margin:0' }, [p.location, p.start_time && `start ${p.start_time}`].filter(Boolean).join(' · ')) : null,
+        p.source_url ? h('a', { href: p.source_url, target: '_blank', rel: 'noopener', class: 'note' }, 'Source') : null),
+      btn);
+  };
+  const render = () => {
+    log.replaceChildren(...state.chat.map((m) => h('div', { class: `msg ${m.role}` },
+      h('div', { class: 'bubble' }, m.content),
+      ...(m.proposals || []).map(proposalCard),
+      m.sources?.length ? h('div', { class: 'sources' }, 'Sources: ', ...m.sources.slice(0, 3).flatMap((s, i) => [i ? ' · ' : '', h('a', { href: s.url, target: '_blank', rel: 'noopener' }, s.title)])) : null)));
+    log.scrollTop = log.scrollHeight;
+  };
+  const input = h('input', { placeholder: status.enabled ? 'e.g. “Add Corrida do Sporting, I want 49 minutes”' : 'Assistant not set up', disabled: status.enabled ? null : '' });
+  const send = h('button', { class: 'primary', type: 'submit', disabled: status.enabled ? null : '' }, 'Send');
+  const formEl = h('form', { class: 'chat-form', onsubmit: async (e) => {
+    e.preventDefault();
+    const text = input.value.trim(); if (!text) return;
+    state.chat.push({ role: 'user', content: text }); input.value = ''; send.disabled = true;
+    state.chat.push({ role: 'assistant', content: 'Searching…', pending: true }); render();
+    try {
+      const out = await api('/assistant/chat', { method: 'POST', body: JSON.stringify({ messages: state.chat.filter((m) => !m.pending).map(({ role, content }) => ({ role, content })) }) });
+      state.chat.pop(); state.chat.push({ role: 'assistant', content: out.reply, proposals: out.proposals, sources: out.sources });
+    } catch (err) { state.chat.pop(); state.chat.push({ role: 'assistant', content: `Sorry — ${err.message}` }); }
+    send.disabled = false; render(); input.focus();
+  } }, input, send);
+  if (!state.chat.length) state.chat.push({ role: 'assistant', content: status.enabled
+    ? 'Tell me about a race — name, and your goal time if you have one. I’ll look up the date and distance and show it here for you to add.'
+    : 'The race assistant needs a Claude API key. Add HC_ANTHROPIC_API_KEY to your .env and restart the app. You can still use the form below.' });
+  render();
+  return card('Ask Claude', 'Researches the race on the web; nothing is saved until you click Add.', [log, formEl]);
+}
+
 async function races() {
-  const list = await api('/races');
+  const [list, status] = await Promise.all([api('/races'), api('/assistant').catch(() => ({ enabled: false }))]);
   const form = h('form', { class: 'race', onsubmit: async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
@@ -250,7 +301,9 @@ async function races() {
   view.replaceChildren(
     h('h1', {}, 'Races'),
     h('p', { class: 'lede' }, 'Your training plan is built around these. A = main race (full build and taper), B = tune-up (mini-taper, easy days after), C = training race (replaces that week’s hard session).'),
-    card('Add a race', null, form),
+    assistantCard(list, status),
+    h('div', { style: 'height:16px' }),
+    card('Add a race manually', null, form),
     h('h2', {}, 'Upcoming'),
     list.length ? h('div', { class: 'card tablebox' }, h('table', {},
       h('thead', {}, h('tr', {}, ['Date', 'Race', 'Distance', 'Goal', 'Pace', 'Priority', 'Days to go', ''].map((x, i) => h('th', { class: [2, 3, 4, 6].includes(i) ? 'num' : '' }, x)))),

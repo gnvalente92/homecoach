@@ -30,6 +30,11 @@ class Settings(BaseSettings):
 
     web_dir: Path = Path("/app/web")
 
+    # Optional race assistant (Claude API with web search). Off unless a key is set.
+    anthropic_api_key: SecretStr | None = None
+    assistant_model: str = "claude-sonnet-5-5"
+    assistant_max_searches: int = 5
+
     # Optional HTTP basic auth for the web app and API (recommended if reachable beyond your LAN).
     auth_user: str | None = None
     auth_password: SecretStr | None = None
