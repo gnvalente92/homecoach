@@ -38,6 +38,9 @@ Pages load instantly because they read from the local database. A collector keep
 outlooks when AI is enabled. A successful review replaces pending recommendations; accepted changes and check-ins remain.
 If the model fails, previous recommendations remain and the completion message reports which refresh failed.
 
+See [feature choices](docs/FEATURES.md) for the comparison with other training apps, and [the audit](docs/AUDIT.md) for
+fixes and verification limits.
+
 ## Screenshots
 
 <sub>Synthetic demo data: “Alex”, building towards a half marathon, with a tune-up 10K and a parkrun on the way. Regenerate it with `backend/scripts/seed_demo.py`.</sub>
@@ -228,7 +231,8 @@ HC_DATABASE_URL=sqlite:///demo.db HC_PROVIDER=none HC_WEB_DIR=../web/dist uvicor
 ```
 
 In a second terminal, run `cd web && npm ci && npm run dev` from the repository root. Vite proxies `/api` to port 8080.
-The backend requires Python 3.12 or newer; CI uses 3.12. Refresh dependency pins deliberately with
+The backend requires Python 3.12 or newer; CI uses 3.12. The frontend build uses Node 24 LTS in CI and Docker.
+Refresh dependency pins deliberately with
 `uv pip compile backend/pyproject.toml --extra dev --universal --python-version 3.12 --no-header --no-annotate --output-file backend/constraints.txt`
 from the repository root, then run the tests and production build.
 
