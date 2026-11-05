@@ -1,0 +1,10 @@
+apiVersion: 1
+datasources:
+  - name: homecoach
+    uid: homecoach-pg
+    type: grafana-postgresql-datasource
+    url: db:5432
+    user: homecoach
+    jsonData: { database: homecoach, sslmode: disable, postgresVersion: 1600 }
+    secureJsonData: { password: $HC_PG_PASSWORD }
+    isDefault: true

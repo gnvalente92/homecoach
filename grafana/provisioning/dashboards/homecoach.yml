@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: homecoach
+    folder: homecoach
+    type: file
+    options: { path: /var/lib/grafana/dashboards }

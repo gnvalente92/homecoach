@@ -7,10 +7,18 @@ from homecoach.plan import engine as E
 TODAY = date(2026, 11, 5)  # a Thursday
 NEXT_MON = date(2026, 11, 9)
 
-RUNS = [E.Run(date(2026, 11, 3), 12.13, 4338), E.Run(date(2026, 10, 29), 12.04, 4236), E.Run(date(2026, 10, 28), 12.04, 4154),
-        E.Run(date(2026, 10, 27), 12.2, 4340), E.Run(date(2026, 10, 25), 11.55, 4168), E.Run(date(2026, 10, 23), 10.03, 3557),
-        E.Run(date(2026, 10, 22), 10.04, 3565), E.Run(date(2026, 10, 20), 10.03, 3600), E.Run(date(2026, 10, 18), 10.03, 3641),
-        E.Run(date(2026, 10, 11), 21.26, 6613)]
+RUNS = [
+    E.Run(date(2026, 11, 3), 12.13, 4338),
+    E.Run(date(2026, 10, 29), 12.04, 4236),
+    E.Run(date(2026, 10, 28), 12.04, 4154),
+    E.Run(date(2026, 10, 27), 12.2, 4340),
+    E.Run(date(2026, 10, 25), 11.55, 4168),
+    E.Run(date(2026, 10, 23), 10.03, 3557),
+    E.Run(date(2026, 10, 22), 10.04, 3565),
+    E.Run(date(2026, 10, 20), 10.03, 3600),
+    E.Run(date(2026, 10, 18), 10.03, 3641),
+    E.Run(date(2026, 10, 11), 21.26, 6613),
+]
 DAYS = [E.Day(TODAY - timedelta(days=i), resting_hr=54, hrv_avg=40, hrv_lo=34, hrv_hi=44, load_ratio=0.94) for i in range(28)]
 
 
@@ -74,9 +82,11 @@ def test_race_week_next_week(base):
 
 
 def test_b_and_c_races_shape_weeks(base):
-    races = [E.RaceIn("Marathon", date(2027, 4, 4), 42.2, None, "A"),
-             E.RaceIn("Half", date(2027, 3, 7), 21.1, 105 * 60, "B"),
-             E.RaceIn("Sporting", date(2026, 11, 15), 10, 49 * 60, "C")]
+    races = [
+        E.RaceIn("Marathon", date(2027, 4, 4), 42.2, None, "A"),
+        E.RaceIn("Half", date(2027, 3, 7), 21.1, 105 * 60, "B"),
+        E.RaceIn("Sporting", date(2026, 11, 15), 10, 49 * 60, "C"),
+    ]
     weeks = E.race_plan(races, base)
     c_week = weeks[0]
     assert c_week.race_in_week["priority"] == "C" and c_week.key.startswith("C race")

@@ -28,11 +28,26 @@ BASE_URLS = {
 
 # COROS numeric sport types -> readable names (subset; unknown codes fall back to "Sport <code>")
 SPORT_NAMES = {
-    100: "Outdoor Run", 101: "Indoor Run", 102: "Trail Run", 103: "Track Run", 104: "Hike",
-    105: "Mountain Climb", 200: "Outdoor Bike", 201: "Indoor Bike", 203: "Gravel Bike",
-    204: "Mountain Bike", 300: "Pool Swim", 301: "Open Water Swim", 400: "Gym Cardio",
-    401: "GPS Cardio", 402: "Strength", 900: "Walk", 901: "Jump Rope", 903: "Elliptical",
-    904: "Yoga", 1200: "Hybrid Fitness",
+    100: "Outdoor Run",
+    101: "Indoor Run",
+    102: "Trail Run",
+    103: "Track Run",
+    104: "Hike",
+    105: "Mountain Climb",
+    200: "Outdoor Bike",
+    201: "Indoor Bike",
+    203: "Gravel Bike",
+    204: "Mountain Bike",
+    300: "Pool Swim",
+    301: "Open Water Swim",
+    400: "Gym Cardio",
+    401: "GPS Cardio",
+    402: "Strength",
+    900: "Walk",
+    901: "Jump Rope",
+    903: "Elliptical",
+    904: "Yoga",
+    1200: "Hybrid Fitness",
 }
 
 
@@ -96,17 +111,20 @@ class CorosProvider:
         out: list[ActivityRecord] = []
         page = 1
         while True:
-            data = self._request(
-                "GET",
-                "/activity/query",
-                params={
-                    "size": 100,
-                    "pageNumber": page,
-                    "startDay": start.strftime("%Y%m%d"),
-                    "endDay": end.strftime("%Y%m%d"),
-                    "modeList": "",
-                },
-            ) or {}
+            data = (
+                self._request(
+                    "GET",
+                    "/activity/query",
+                    params={
+                        "size": 100,
+                        "pageNumber": page,
+                        "startDay": start.strftime("%Y%m%d"),
+                        "endDay": end.strftime("%Y%m%d"),
+                        "modeList": "",
+                    },
+                )
+                or {}
+            )
             items = data.get("dataList") or []
             out.extend(a for a in (self._activity(i) for i in items) if a)
             total_pages = int(data.get("totalPage") or 1)
@@ -164,9 +182,12 @@ class CorosProvider:
         cur = start
         while cur <= end:  # the analyse endpoint is queried in 4-week windows
             chunk_end = min(end, cur + timedelta(days=27))
-            data = self._request(
-                "GET", "/analyse/query", params={"startDay": cur.strftime("%Y%m%d"), "endDay": chunk_end.strftime("%Y%m%d")}
-            ) or {}
+            data = (
+                self._request(
+                    "GET", "/analyse/query", params={"startDay": cur.strftime("%Y%m%d"), "endDay": chunk_end.strftime("%Y%m%d")}
+                )
+                or {}
+            )
             for d in data.get("dayList") or []:
                 rec = self._day(d)
                 if rec:
@@ -195,10 +216,14 @@ class CorosProvider:
 
     def fetch_fitness(self) -> FitnessRecord | None:
         today = date.today()
-        data = self._request(
-            "GET", "/analyse/query",
-            params={"startDay": (today - timedelta(days=6)).strftime("%Y%m%d"), "endDay": today.strftime("%Y%m%d")},
-        ) or {}
+        data = (
+            self._request(
+                "GET",
+                "/analyse/query",
+                params={"startDay": (today - timedelta(days=6)).strftime("%Y%m%d"), "endDay": today.strftime("%Y%m%d")},
+            )
+            or {}
+        )
         s = data.get("summaryInfo") or {}
         vo2 = _float(s.get("vo2max") or s.get("vo2Max"))
         # lthr pace is reported as seconds per km on some accounts; validate the range.

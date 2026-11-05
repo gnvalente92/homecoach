@@ -31,8 +31,22 @@ def upsert_activity(s: Session, a: ActivityRecord) -> bool:
         if dup:
             return False
     row = existing or Activity(id=a.id)
-    for f in ("provider", "external_id", "sport", "type", "name", "start_time", "local_date", "duration_s",
-              "distance_m", "avg_hr", "max_hr", "calories", "training_load", "raw"):
+    for f in (
+        "provider",
+        "external_id",
+        "sport",
+        "type",
+        "name",
+        "start_time",
+        "local_date",
+        "duration_s",
+        "distance_m",
+        "avg_hr",
+        "max_hr",
+        "calories",
+        "training_load",
+        "raw",
+    ):
         setattr(row, f, getattr(a, f))
     s.add(row)
     return existing is None
@@ -96,8 +110,14 @@ def sync_provider(s: Session, provider: Provider, settings: Settings, *, full: b
     except Exception as e:  # fitness is a nice-to-have; never fail the sync for it
         log.warning("fitness fetch failed: %s", e)
 
-    set_state(s, f"provider:{provider.name}", {"last_sync": datetime.now().isoformat(), "last_full": (
-        datetime.now().isoformat() if (full or first_run) else state.get("last_full"))})
+    set_state(
+        s,
+        f"provider:{provider.name}",
+        {
+            "last_sync": datetime.now().isoformat(),
+            "last_full": (datetime.now().isoformat() if (full or first_run) else state.get("last_full")),
+        },
+    )
     return stats
 
 
@@ -126,7 +146,10 @@ def import_fit_inbox(s: Session, settings: Settings) -> int:
         try:
             rec = parse_fit(data, settings.timezone)
         except Exception as e:
-            log.warning("could not parse %s: %s", p.name, e)
+            log.warning("could not parse %s, moved to failed/: %s", p.name, e)
+            failed = settings.fit_inbox / "failed"
+            failed.mkdir(exist_ok=True)
+            p.rename(failed / p.name)
             continue
         if rec and upsert_activity(s, rec):
             dest = settings.fit_dir / rec.local_date.strftime("%Y/%m") / f"fit_{rec.external_id}.fit"

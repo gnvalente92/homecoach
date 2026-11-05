@@ -1,0 +1,92 @@
+# homecoach on TrueNAS SCALE (Apps → Discover Apps → Install via YAML) or any Docker host.
+# All personal settings come from .env (see .env.example). Nothing personal lives in this file.
+name: homecoach
+
+x-env: &env
+  HC_DATABASE_URL: postgresql+psycopg://homecoach:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/homecoach
+  HC_ATHLETE_NAME: ${HC_ATHLETE_NAME:-Athlete}
+  HC_TIMEZONE: ${HC_TIMEZONE:-Europe/Lisbon}
+  HC_PROVIDER: ${HC_PROVIDER:-coros}
+  HC_COROS_EMAIL: ${HC_COROS_EMAIL:-}
+  HC_COROS_PASSWORD: ${HC_COROS_PASSWORD:-}
+  HC_COROS_REGION: ${HC_COROS_REGION:-eu}
+  HC_SYNC_INTERVAL_MINUTES: ${HC_SYNC_INTERVAL_MINUTES:-10}
+  HC_FULL_SYNC_HOUR: ${HC_FULL_SYNC_HOUR:-3}
+  HC_BACKFILL_DAYS: ${HC_BACKFILL_DAYS:-730}
+  HC_THRESHOLD_PACE: ${HC_THRESHOLD_PACE:-}
+  HC_AUTH_USER: ${HC_AUTH_USER:-}
+  HC_AUTH_PASSWORD: ${HC_AUTH_PASSWORD:-}
+  TZ: ${HC_TIMEZONE:-Europe/Lisbon}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: homecoach
+      POSTGRES_DB: homecoach
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - ${HC_PG_PATH:-./data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homecoach"]
+      interval: 10s
+      retries: 10
+
+  web:
+    image: ghcr.io/gnvalente92/homecoach:${HC_VERSION:-latest}
+    restart: unless-stopped
+    command: ["api"]
+    environment: *env
+    ports:
+      - "${HC_WEB_PORT:-8080}:8080"
+    volumes:
+      - ${HC_DATA_PATH:-./data/app}:/data
+    depends_on:
+      db: { condition: service_healthy }
+
+  collector:
+    image: ghcr.io/gnvalente92/homecoach:${HC_VERSION:-latest}
+    restart: unless-stopped
+    command: ["collector"]
+    environment: *env
+    volumes:
+      - ${HC_DATA_PATH:-./data/app}:/data
+    depends_on:
+      web: { condition: service_healthy }  # web runs migrations on start
+
+  grafana:
+    image: grafana/grafana-oss:11.3.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      HC_PG_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      db: { condition: service_healthy }
+    profiles: ["grafana"]
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      KEEP_DAYS: ${HC_BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ${HC_BACKUP_PATH:-./data/backups}:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          f=/backups/homecoach-$$(date +%F).sql.gz
+          pg_dump -h db -U homecoach homecoach | gzip > "$$f.tmp" && mv "$$f.tmp" "$$f" && echo "backup $$f"
+          find /backups -name 'homecoach-*.sql.gz' -mtime +$$KEEP_DAYS -delete
+          sleep 86400
+        done
+    depends_on:
+      db: { condition: service_healthy }

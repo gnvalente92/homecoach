@@ -39,12 +39,11 @@ def _safe(full: bool) -> None:
 def main() -> None:
     settings = get_settings()
     sched = BlockingScheduler(timezone=settings.timezone)
-    sched.add_job(_safe, "interval", minutes=settings.sync_interval_minutes, args=[False],
-                  id="incremental", max_instances=1, coalesce=True)
-    sched.add_job(_safe, "cron", hour=settings.full_sync_hour, minute=17, args=[True],
-                  id="full", max_instances=1, coalesce=True)
+    sched.add_job(
+        _safe, "interval", minutes=settings.sync_interval_minutes, args=[False], id="incremental", max_instances=1, coalesce=True
+    )
+    sched.add_job(_safe, "cron", hour=settings.full_sync_hour, minute=17, args=[True], id="full", max_instances=1, coalesce=True)
     signal.signal(signal.SIGTERM, lambda *_: sched.shutdown(wait=False))
-    log.info("collector started: every %d min, full sync at %02d:17", settings.sync_interval_minutes,
-             settings.full_sync_hour)
+    log.info("collector started: every %d min, full sync at %02d:17", settings.sync_interval_minutes, settings.full_sync_hour)
     _safe(False)  # first run immediately (does a backfill when the database is empty)
     sched.start()

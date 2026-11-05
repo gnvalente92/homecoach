@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     full_sync_hour: int = 3
     backfill_days: int = 730
     download_fit: bool = True
+    # Optional override, e.g. "4:50" (min:sec per km). Otherwise taken from the provider or estimated.
+    threshold_pace: str | None = None
+
+    web_dir: Path = Path("/app/web")
+
+    # Optional HTTP basic auth for the web app and API (recommended if reachable beyond your LAN).
+    auth_user: str | None = None
+    auth_password: SecretStr | None = None
 
     data_dir: Path = Path("/data")
 

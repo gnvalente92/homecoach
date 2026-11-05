@@ -243,10 +243,18 @@ def race_plan(races: list[RaceIn], b: Baseline) -> list[Week]:
     p = fmt_pace
     key = {
         "Base": "Easy runs plus 6 × 20 s strides and 6 × 10 s hill sprints",
-        "Build": {"marathon": f"4 × 8 min at {p(T)}/km (threshold)", "half": f"4 × 8 min at {p(T)}/km (threshold)",
-                  "10k": f"5 × 1 km at {p(rp)}/km, 2 min jog", "5k": f"6 × 800 m at {p(rp - 5)}/km, 400 m jog"}[cat],
-        "Peak": {"marathon": f"Long run with 2 × 6 km at {p(rp)}/km", "half": f"3 × 4 km at {p(rp)}/km, 2 min jog",
-                 "10k": f"4 × 2 km at {p(rp)}/km, 2 min jog", "5k": f"8 × 400 m at {p(rp - 10)}/km, 200 m jog"}[cat],
+        "Build": {
+            "marathon": f"4 × 8 min at {p(T)}/km (threshold)",
+            "half": f"4 × 8 min at {p(T)}/km (threshold)",
+            "10k": f"5 × 1 km at {p(rp)}/km, 2 min jog",
+            "5k": f"6 × 800 m at {p(rp - 5)}/km, 400 m jog",
+        }[cat],
+        "Peak": {
+            "marathon": f"Long run with 2 × 6 km at {p(rp)}/km",
+            "half": f"3 × 4 km at {p(rp)}/km, 2 min jog",
+            "10k": f"4 × 2 km at {p(rp)}/km, 2 min jog",
+            "5k": f"8 × 400 m at {p(rp - 10)}/km, 200 m jog",
+        }[cat],
         "Taper": f"Short sharpener: 4 × 1 km at {p(rp)}/km",
         "Race week": f"Race: {race.name} at {p(rp)}/km. Two short easy runs before it",
     }
@@ -273,8 +281,7 @@ def race_plan(races: list[RaceIn], b: Baseline) -> list[Week]:
                 long = min(P["long_max"], long + 1.5, max(vol * P["share"], long))
             total = vol * 0.8 if easier else vol
             lr = long * 0.75 if easier else long
-        weeks.append(Week(b.next_monday + timedelta(weeks=i), left, phase, half(total), half(lr), key[phase], easier,
-                          target=tgt))
+        weeks.append(Week(b.next_monday + timedelta(weeks=i), left, phase, half(total), half(lr), key[phase], easier, target=tgt))
 
     for r in upcoming(races, b.today):
         if r is race:
@@ -304,8 +311,16 @@ def _strength(d: date) -> Session:
     return Session(d, "Strength", detail="45 min, legs and core (single-leg work, calves, hips). Lighter in race weeks")
 
 
-def _lay(b: Baseline, total: float, long: float, quality: Session | None, *, strides: bool = False,
-         runs: int | None = None, long_finish: str | None = None) -> list[Session]:
+def _lay(
+    b: Baseline,
+    total: float,
+    long: float,
+    quality: Session | None,
+    *,
+    strides: bool = False,
+    runs: int | None = None,
+    long_finish: str | None = None,
+) -> list[Session]:
     T = b.threshold_s
     easy = easy_range(T)
     total, long = half(total), half(long)
@@ -316,12 +331,26 @@ def _lay(b: Baseline, total: float, long: float, quality: Session | None, *, str
     items: list[Session] = []
     for i in range(n_easy):
         s = i == 0 and strides
-        items.append(Session(b.next_monday, "Easy run + strides" if s else "Easy run", easy_km, easy,
-                             "Relaxed; finish with 6 × 20 s strides" if s else "Conversational effort, keep heart rate low"))
+        items.append(
+            Session(
+                b.next_monday,
+                "Easy run + strides" if s else "Easy run",
+                easy_km,
+                easy,
+                "Relaxed; finish with 6 × 20 s strides" if s else "Conversational effort, keep heart rate low",
+            )
+        )
     if quality:
         items.insert(1, quality)
-    items.append(Session(b.next_monday, "Long run", long, easy,
-                         f"Easy, {long_finish}" if long_finish else "Easy and steady, take water if over 90 min"))
+    items.append(
+        Session(
+            b.next_monday,
+            "Long run",
+            long,
+            easy,
+            f"Easy, {long_finish}" if long_finish else "Easy and steady, take water if over 90 min",
+        )
+    )
     for s, d in zip(items, days, strict=False):
         s.day = b.next_monday + timedelta(days=d)
     return [_strength(b.next_monday), *items]
@@ -333,8 +362,13 @@ def next_week(b: Baseline, weeks: list[Week], r: Readiness) -> list[Session]:
     k = r.factor
     if not weeks:  # no race: keep fitness
         total = max(b.weekly_km, 18) * k
-        q = Session(b.next_monday, "Threshold run", half(clamp(total * 0.3, 8, 12)), f"{fmt_pace(T)} /km",
-                    f"2 km easy, 3 × 8 min at {fmt_pace(T)}/km with 2 min jog, then easy to finish")
+        q = Session(
+            b.next_monday,
+            "Threshold run",
+            half(clamp(total * 0.3, 8, 12)),
+            f"{fmt_pace(T)} /km",
+            f"2 km easy, 3 × 8 min at {fmt_pace(T)}/km with 2 min jog, then easy to finish",
+        )
         return _lay(b, total, clamp(total * 0.4, 8, total * 0.45), q)
 
     w = weeks[0]
@@ -346,26 +380,43 @@ def next_week(b: Baseline, weeks: list[Week], r: Readiness) -> list[Session]:
             Session(race_day - 5 * DAY, "Easy run + strides", 6, easy, "6 × 20 s strides at the end, nothing harder"),
             Session(race_day - 3 * DAY, "Race-pace sharpener", 6, f"{rp} /km", f"2 km easy, 3 × 1 km at {rp}/km, 1 km easy"),
         ]
-        race_s = Session(race_day, f"Race: {t['name']}", t["km"], f"{rp} /km",
-                         "Start a little slower than race pace for the first 3 km, then settle in")
+        race_s = Session(
+            race_day,
+            f"Race: {t['name']}",
+            t["km"],
+            f"{rp} /km",
+            "Start a little slower than race pace for the first 3 km, then settle in",
+        )
         return [x for x in before if x.day >= nm] + [race_s]
     if w.race_in_week:
         x = w.race_in_week
         rd: date = x["day"]
         out: list[Session] = [_strength(nm)]
         if x["priority"] == "B":
-            for off, s in ((5, Session(rd, "Easy run + strides", 6, easy, "6 × 20 s strides at the end")),
-                           (3, Session(rd, "Race-pace sharpener", 6, f"{x['pace']} /km",
-                                       f"2 km easy, 3 × 1 km at {x['pace']}/km, 1 km easy"))):
+            for off, s in (
+                (5, Session(rd, "Easy run + strides", 6, easy, "6 × 20 s strides at the end")),
+                (
+                    3,
+                    Session(
+                        rd, "Race-pace sharpener", 6, f"{x['pace']} /km", f"2 km easy, 3 × 1 km at {x['pace']}/km, 1 km easy"
+                    ),
+                ),
+            ):
                 s.day = max(nm, rd - timedelta(days=off))
                 if s.day < rd and all(o.day != s.day for o in out[1:]):
                     out.append(s)
             out.append(Session(rd, f"B race: {x['name']}", x["km"], f"{x['pace']} /km", "Tune-up: race it, then easy for 3 days"))
         else:
-            out.append(Session(max(nm, rd - 3 * DAY), "Easy run", half(clamp(w.total_km * 0.25, 5, 10)), easy,
-                               "Conversational effort"))
-            race_s = Session(rd, f"C race: {x['name']}", x["km"], f"{x['pace']} /km",
-                             "Training race: this is the week's hard session, no taper")
+            out.append(
+                Session(max(nm, rd - 3 * DAY), "Easy run", half(clamp(w.total_km * 0.25, 5, 10)), easy, "Conversational effort")
+            )
+            race_s = Session(
+                rd,
+                f"C race: {x['name']}",
+                x["km"],
+                f"{x['pace']} /km",
+                "Training race: this is the week's hard session, no taper",
+            )
             out.append(race_s)
             if rd.weekday() < 6:
                 out.append(Session(nm + 6 * DAY, "Long run", half(w.long_km * k), easy, "Easy and steady"))
@@ -383,8 +434,9 @@ def next_week(b: Baseline, weeks: list[Week], r: Readiness) -> list[Session]:
     return _lay(b, total, long, q, strides=w.phase == "Base", runs=3 if w.phase == "Taper" else None, long_finish=finish)
 
 
-def this_week(runs: list[Run], b: Baseline, races: list[RaceIn], r: Readiness,
-              done: list[Run] | None = None) -> tuple[list[Session], float, float]:
+def this_week(
+    runs: list[Run], b: Baseline, races: list[RaceIn], r: Readiness, done: list[Run] | None = None
+) -> tuple[list[Session], float, float]:
     """Returns (sessions Monday..Sunday, done_km, target_km). `done` = all activities this week
     (any sport) for display; `runs` drives the maths."""
     today, T = b.today, b.threshold_s
@@ -399,9 +451,16 @@ def this_week(runs: list[Run], b: Baseline, races: list[RaceIn], r: Readiness,
     out: list[Session] = []
     for a in done or wk_runs:
         if mon <= a.day <= days[-1]:
-            out.append(Session(a.day, a.sport, round(a.km, 2) if a.km else 0, f"{fmt_pace(a.pace_s)} /km" if a.pace_s else "",
-                               f"{a.duration_s // 60} min" + (f" · avg HR {a.avg_hr}" if a.avg_hr else "") if a.duration_s else "",
-                               status="Done"))
+            out.append(
+                Session(
+                    a.day,
+                    a.sport,
+                    round(a.km, 2) if a.km else 0,
+                    f"{fmt_pace(a.pace_s)} /km" if a.pace_s else "",
+                    f"{a.duration_s // 60} min" + (f" · avg HR {a.avg_hr}" if a.avg_hr else "") if a.duration_s else "",
+                    status="Done",
+                )
+            )
     ran_today = any(x.day == today for x in wk_runs)
     free = [d for d in days if d > today or (d == today and not ran_today)]
     left = max(0.0, target - done_km)
@@ -412,8 +471,15 @@ def this_week(runs: list[Run], b: Baseline, races: list[RaceIn], r: Readiness,
     if in_week:
         label = "Race" if in_week is race else f"{in_week.priority} race"
         rp = fmt_pace(race_pace(in_week, T))
-        plan.append(Session(in_week.day, f"{label}: {in_week.name}", in_week.distance_km, f"{rp} /km",
-                            "Training race, this week's hard session" if in_week.priority == "C" else "Race day"))
+        plan.append(
+            Session(
+                in_week.day,
+                f"{label}: {in_week.name}",
+                in_week.distance_km,
+                f"{rp} /km",
+                "Training race, this week's hard session" if in_week.priority == "C" else "Race day",
+            )
+        )
         left -= in_week.distance_km
         if in_week.priority != "C":
             before = [d for d in free if d < in_week.day]
@@ -431,10 +497,19 @@ def this_week(runs: list[Run], b: Baseline, races: list[RaceIn], r: Readiness,
         km = half(min(left, 9))
         if race_soon and race:
             rp = fmt_pace(race_pace(race, T))
-            plan.append(Session(mid[0], "Race-pace session", km, f"{rp} /km", f"2 km easy, 3 × 2 km at {rp}/km, 2 min jog, 1 km easy"))
+            plan.append(
+                Session(mid[0], "Race-pace session", km, f"{rp} /km", f"2 km easy, 3 × 2 km at {rp}/km, 2 min jog, 1 km easy")
+            )
         else:
-            plan.append(Session(mid[0], "Threshold run", km, f"{fmt_pace(T)} /km",
-                                f"2 km easy, 3 × 8 min at {fmt_pace(T)}/km with 2 min jog, then easy"))
+            plan.append(
+                Session(
+                    mid[0],
+                    "Threshold run",
+                    km,
+                    f"{fmt_pace(T)} /km",
+                    f"2 km easy, 3 × 8 min at {fmt_pace(T)}/km with 2 min jog, then easy",
+                )
+            )
         left -= km
     rest = [d for d in free if all(p.day != d for p in plan) and (not mid or d != mid[0])]
     if left >= 4 and rest:
@@ -454,10 +529,25 @@ def road(runs: list[Run], weeks: list[Week], b: Baseline, past_weeks: int = 8) -
     for i in range(past_weeks, 0, -1):
         ws = b.next_monday - timedelta(weeks=i)
         wk = [r for r in runs if r.type == "Run" and r.km and ws <= r.day < ws + 7 * DAY]
-        out.append({"week": ws, "kind": "Actual", "phase": "This week so far" if i == 1 else "Actual",
-                    "total_km": round(sum(r.km for r in wk), 1), "long_km": round(max((r.km for r in wk), default=0), 1)})
-    out += [{"week": w.week, "kind": "Planned", "phase": w.phase + (" (easier week)" if w.easier else ""),
-             "total_km": w.total_km, "long_km": w.long_km} for w in weeks]
+        out.append(
+            {
+                "week": ws,
+                "kind": "Actual",
+                "phase": "This week so far" if i == 1 else "Actual",
+                "total_km": round(sum(r.km for r in wk), 1),
+                "long_km": round(max((r.km for r in wk), default=0), 1),
+            }
+        )
+    out += [
+        {
+            "week": w.week,
+            "kind": "Planned",
+            "phase": w.phase + (" (easier week)" if w.easier else ""),
+            "total_km": w.total_km,
+            "long_km": w.long_km,
+        }
+        for w in weeks
+    ]
     return out
 
 

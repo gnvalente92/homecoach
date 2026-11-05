@@ -3,6 +3,7 @@
 Revision ID: 0001
 Revises:
 """
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -39,7 +40,10 @@ def upgrade() -> None:
         "daily_metrics",
         sa.Column("day", sa.Date, primary_key=True),
         *[sa.Column(c, sa.Integer) for c in ("steps", "active_kcal", "exercise_min", "stress_avg", "resting_hr")],
-        *[sa.Column(c, sa.Float) for c in ("hrv_avg", "hrv_lo", "hrv_hi", "training_load", "load_short", "load_long", "load_ratio")],
+        *[
+            sa.Column(c, sa.Float)
+            for c in ("hrv_avg", "hrv_lo", "hrv_hi", "training_load", "load_short", "load_long", "load_ratio")
+        ],
         *[sa.Column(c, sa.Integer) for c in ("sleep_min", "deep_min", "light_min", "rem_min", "awake_min", "sleep_score")],
         sa.Column("sleep_start", TS),
         sa.Column("raw", sa.JSON),

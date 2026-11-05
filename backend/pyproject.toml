@@ -31,7 +31,7 @@ homecoach = "homecoach.cli:main"
 packages = ["src/homecoach"]
 
 [tool.ruff]
-line-length = 110
+line-length = 130
 target-version = "py312"
 
 [tool.ruff.lint]
