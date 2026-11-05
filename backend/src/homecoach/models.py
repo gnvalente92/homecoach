@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from homecoach.db import Base
@@ -124,6 +124,7 @@ class CoachSuggestion(Base):
     pace: Mapped[str | None] = mapped_column(String(40))
     detail: Mapped[str | None] = mapped_column(Text)
     move_to: Mapped[date | None] = mapped_column(Date)
+    duration_min: Mapped[int | None] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(10), default="chat")  # chat | review
     status: Mapped[str] = mapped_column(String(10), default="pending", index=True)  # pending | accepted | dismissed
@@ -150,3 +151,16 @@ class RaceInsight(Base):
     text: Mapped[str] = mapped_column(Text)
     facts: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TrainingGoal(Base):
+    """A recurring calendar goal, independent of the coach's running-volume plan."""
+
+    __tablename__ = "training_goals"
+    __table_args__ = (UniqueConstraint("period", "sport", "metric", name="uq_training_goal"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    period: Mapped[str] = mapped_column(String(10))
+    sport: Mapped[str] = mapped_column(String(20))
+    metric: Mapped[str] = mapped_column(String(20))
+    target: Mapped[float] = mapped_column(Float)

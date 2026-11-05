@@ -38,6 +38,9 @@ def _llm_on(monkeypatch):
 
 @respx.mock
 def test_race_assistant_searches_reads_and_proposes(client, monkeypatch):
+    from homecoach import websearch
+
+    monkeypatch.setattr(websearch, "_public_address", lambda _: "93.184.216.34")
     _llm_on(monkeypatch)
     day = (api.today() + timedelta(days=10)).isoformat()
     respx.get(SEARX).mock(
@@ -45,7 +48,7 @@ def test_race_assistant_searches_reads_and_proposes(client, monkeypatch):
             200, json={"results": [{"title": "Corrida Sporting", "url": "https://race.test/", "content": "10 km Lisboa"}]}
         )
     )
-    respx.get("https://race.test/").mock(
+    respx.get("https://93.184.216.34/").mock(
         return_value=httpx.Response(
             200,
             text=(

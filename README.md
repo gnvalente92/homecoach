@@ -2,7 +2,7 @@
 
 **Your own training coach, running on your own server.** homecoach pulls your watch data (COROS today, more to come),
 keeps it in your own database, and turns your race calendar into a week-by-week plan that adapts to how you're actually
-doing. It's built for TrueNAS SCALE and runs on any Docker host. Everything stays at home, including the optional AI.
+doing. It's built for TrueNAS SCALE and runs on any Docker host. Data is stored on your server; optional AI can use a local model or a remote service you configure.
 
 ![Today: readiness, today's session, this week, form and the next race](docs/screenshots/today.png)
 
@@ -26,10 +26,20 @@ doing. It's built for TrueNAS SCALE and runs on any Docker host. Everything stay
 - **Overview, Trends and Recovery**: totals compared with the previous period, a fitness / fatigue / form chart, pace vs
   heart rate, running efficiency, activity and step calendars, sleep stages, HRV and resting HR against your baseline,
   and stress.
+- **Goals**: recurring weekly, monthly or yearly targets for distance, time or sessions, by sport or across all sports.
+  Edit targets and follow progress from recorded activities, including strength work. Goals do not increase the plan's
+  training load automatically.
+- **Training log**: search activity names, filter by sport and dates, and page through your history. Compare monthly
+  distance, time and session totals with the same months last year; the current month compares elapsed days only.
 - **Grafana** (optional), pointed at the same database for your own analysis.
 
 Pages load instantly because they read from the local database. A collector keeps it up to date every 10 minutes, and
-**↻ Full resync** (top right) re-reads your whole history and refreshes the plan and race outlooks on demand.
+**↻ Full resync** (top right) re-reads your whole history, rebuilds the plan and runs a fresh coach review and race
+outlooks when AI is enabled. A successful review replaces pending recommendations; accepted changes and check-ins remain.
+If the model fails, previous recommendations remain and the completion message reports which refresh failed.
+
+See [feature choices](docs/FEATURES.md) for the comparison with other training apps, and [the audit](docs/AUDIT.md) for
+fixes and verification limits.
 
 ## Screenshots
 
@@ -99,7 +109,7 @@ Providers live in `backend/src/homecoach/providers/` and map vendor data into on
 
 - **Readiness** counts warning flags: load ratio over 1.3 (over 1.5 counts as two), HRV below its normal range, and a
   7-day resting HR at least 3 bpm above the 28-day average. No flags means *Ready* at 100% of planned volume, one flag
-  *Hold* at 90%, and two or more *Back off* at 75%.
+  *Hold* at 90%, and two or more *Back off* at 75%. Signals must come from today or yesterday. If none are usable, readiness is *Unknown*, with no score and no readiness-based volume adjustment. Missing signals are listed.
 - **Race plan** targets your nearest A race (or your nearest race if none is marked A). It runs through base, build,
   peak and taper phases. Volume grows about 8% a week up to a peak set by distance, every fourth week is 20% easier, and
   the taper takes 1 to 3 weeks depending on distance.
@@ -140,8 +150,7 @@ The repo is cloned onto the NAS, your settings live in a `.env` file **outside**
 **Update:** run `cd /mnt/tank/apps/homecoach/src && sudo git pull && sudo docker pull ghcr.io/gnvalente92/homecoach:latest`,
 then **Stop** and **Start** the app.
 
-**Restore a backup:** run `gunzip -c backups/homecoach-YYYY-MM-DD.sql.gz | sudo docker exec -i homecoach-db-1 psql -U homecoach homecoach`.
-Run `sudo docker ps` to check the container name.
+For backup checks, restore instructions and recovery steps, see [Operations](docs/OPERATIONS.md).
 
 On any other Docker host: `docker compose --env-file .env -f docker-compose.yml [-f docker-compose.grafana.yml] up -d`.
 
@@ -161,6 +170,13 @@ for web search. They're off until you enable them.
   **Accept** or **Dismiss** it. Guardrails reject anything that pushes a week more than 10% over the plan, or a run more
   than 15% over your longest recent run; the model is told why and asked to revise. A review runs automatically every
   Sunday at 19:00, and there's also a "Review my week now" button.
+
+The coach also reviews strength training. It can recommend a session with its duration, exercises and reason, update a
+planned strength session, or remove one when recovery or your schedule calls for it. Accepted strength work appears
+alongside any run on that day; it never replaces the run or adds kilometres to running totals. Application limits allow
+up to two strength sessions per week, at most 60 minutes each, and block race-day additions or changes to completed
+strength workouts. These limits do not assess whether an exercise or load suits you. Tell the coach about your experience,
+equipment and restrictions; recommendations remain pending until accepted.
 
 **Enable on TrueNAS**
 
@@ -208,20 +224,28 @@ The most common ones:
 ## Development
 
 ```sh
-cd backend && python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
+cd backend && python -m venv .venv && . .venv/bin/activate && pip install -c constraints.txt -e ".[dev]"
 pytest && ruff check .
 HC_DATABASE_URL=sqlite:///demo.db python scripts/seed_demo.py     # synthetic data
 HC_DATABASE_URL=sqlite:///demo.db HC_PROVIDER=none HC_WEB_DIR=../web/dist uvicorn homecoach.api.main:app --port 8080
-cd ../web && npm install && npm run dev                            # UI with hot reload, proxies /api to :8080
 ```
+
+In a second terminal, run `cd web && npm ci && npm run dev` from the repository root. Vite proxies `/api` to port 8080.
+The backend requires Python 3.12 or newer; CI uses 3.12. The frontend build uses Node 24 LTS in CI and Docker.
+Refresh dependency pins deliberately with
+`uv pip compile backend/pyproject.toml --extra dev --universal --python-version 3.12 --no-header --no-annotate --output-file backend/constraints.txt`
+from the repository root, then run the tests and production build.
 
 API docs are served at `/docs`. Secrets are scanned on every push with gitleaks. Run `pre-commit install` to check them
 locally as well.
 
 ## Privacy
 
-The repository contains no personal data. Your credentials, races, activities and health metrics stay in `.env`, Postgres
-and the FIT archive on your own server. The app makes outbound calls only to your configured provider (and, if enabled, your own SearXNG for race lookups).
+Keep credentials in `.env`; activities, races, check-ins and health metrics are stored in Postgres and the FIT archive.
+The collector calls the configured activity provider. Optional AI sends training context and your messages to the
+configured model endpoint: a remote endpoint receives that data. Race lookup sends queries to SearXNG, whose search
+engines receive those queries, and reads public race pages. The page reader rejects private network addresses and checks
+redirects. The application does not require a Strava account.
 
 ## License
 

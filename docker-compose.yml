@@ -75,14 +75,7 @@ services:
       KEEP_DAYS: ${HC_BACKUP_KEEP_DAYS:-14}
     volumes:
       - ${HC_BACKUP_PATH:-./data/backups}:/backups
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        while true; do
-          f=/backups/homecoach-$$(date +%F).sql.gz
-          pg_dump -h db -U homecoach homecoach | gzip > "$$f.tmp" && mv "$$f.tmp" "$$f" && echo "backup $$f"
-          find /backups -name 'homecoach-*.sql.gz' -mtime +$$KEEP_DAYS -delete
-          sleep 86400
-        done
+      - ./scripts/backup.sh:/opt/homecoach/backup.sh:ro
+    entrypoint: ["/bin/sh", "/opt/homecoach/backup.sh"]
     depends_on:
       db: { condition: service_healthy }

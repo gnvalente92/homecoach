@@ -31,6 +31,37 @@ def reset_web_api_units(s) -> None:
 
 
 def run_once(full: bool = False) -> dict | None:
+    from datetime import UTC, datetime
+
+    from homecoach.collector.sync import get_state, set_state
+    from homecoach.locking import execution_lock
+
+    with execution_lock(get_settings().data_dir / ".sync.lock") as acquired:
+        if not acquired:
+            return {"mode": "skipped", "reason": "another sync is running"}
+        attempted = datetime.now(UTC).isoformat()
+        try:
+            stats = _run_once(full)
+        except Exception as e:
+            with session_scope() as db:
+                previous = get_state(db, "collector-status") or {}
+                set_state(db, "collector-status", {**previous, "last_attempt": attempted, "error": type(e).__name__})
+            raise
+        with session_scope() as db:
+            set_state(
+                db,
+                "collector-status",
+                {
+                    "last_attempt": attempted,
+                    "last_success": datetime.now(UTC).isoformat(),
+                    "error": None,
+                    "provider_synced": stats is not None,
+                },
+            )
+        return stats
+
+
+def _run_once(full: bool = False) -> dict | None:
     """One sync. Returns its stats (None when there's nothing to sync from)."""
     settings = get_settings()
     with session_scope() as s:
@@ -54,15 +85,24 @@ def run_once(full: bool = False) -> dict | None:
             # the first sync through the official connection re-reads everything, even if the old web-API
             # provider already synced (it shares the provider name, so its "last sync" would make this incremental)
             first = not get_state(s, BACKFILL_KEY)
+            original_tokens = dict(provider.s.state.get("tokens") or {})
             if first:
                 reset_web_api_units(s)  # same transaction: rolled back if the sync below fails
             try:
                 stats = sync_provider(s, provider, settings, full=full or first)
                 if full or first:
                     set_state(s, BACKFILL_KEY, {"done": True})
-            finally:  # keep refreshed tokens even if the sync failed half way
+            except Exception:
+                # Activity writes roll back, but a rotated refresh token must survive that rollback.
+                s.rollback()
                 st = provider.s.state
-                if st.pop("changed", False):
+                if st.pop("changed", False) and coros_auth.load(s).get("tokens") == original_tokens:
+                    coros_auth.save(s, st)
+                    s.commit()
+                raise
+            else:
+                st = provider.s.state
+                if st.pop("changed", False) and coros_auth.load(s).get("tokens") == original_tokens:
                     coros_auth.save(s, st)
         else:
             stats = sync_provider(s, get_provider(settings), settings, full=full)

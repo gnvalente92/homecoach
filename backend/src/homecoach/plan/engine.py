@@ -126,6 +126,7 @@ class Session:
     status: str = "Planned"  # Planned | Done | Rest
     adjusted: bool = False  # changed by an accepted coach suggestion
     reason: str = ""
+    duration_min: int | None = None
 
 
 @dataclass
@@ -138,6 +139,7 @@ class Adjustment:
     detail: str | None = None
     move_to: date | None = None
     reason: str = ""
+    duration_min: int | None = None
 
 
 def _main_planned(items: list[Session], d: date) -> Session | None:
@@ -150,7 +152,16 @@ def apply_adjustments(items: list[Session], adjustments: list[Adjustment]) -> li
     out = [Session(**x.__dict__) for x in items]
     for a in adjustments:
         cur = _main_planned(out, a.day)
-        if a.action == "skip":
+        if a.action == "strength":
+            out = [x for x in out if not (x.day == a.day and x.session == "Strength" and x.status == "Planned")]
+            if a.duration_min:
+                out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
+                out.append(
+                    Session(a.day, "Strength", detail=a.detail or "", adjusted=True, reason=a.reason, duration_min=a.duration_min)
+                )
+            elif not any(x.day == a.day for x in out):
+                out.append(Session(a.day, "Rest", status="Rest", adjusted=True, reason=a.reason))
+        elif a.action == "skip":
             if cur:
                 out.remove(cur)
             out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
@@ -179,10 +190,29 @@ def apply_adjustments(items: list[Session], adjustments: list[Adjustment]) -> li
 
 def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longest_recent: float, today: date) -> str | None:
     """Guardrails. Returns a reason when the change is not allowed (the model is asked to revise), else None."""
-    if a.action not in ("replace", "shorten", "skip", "move"):
-        return "action must be replace, shorten, skip or move"
+    if a.action not in ("replace", "shorten", "skip", "move", "strength"):
+        return "action must be replace, shorten, skip, move or strength"
     if a.day < today:
         return f"{a.day} is in the past; you can only change today or later"
+    if a.action == "strength":
+        if type(a.duration_min) is not int or not 0 <= a.duration_min <= 60:
+            return "strength duration_min must be a whole number from 0 (remove) to 60"
+        if a.km not in (None, 0) or a.pace or a.move_to:
+            return "strength uses duration_min, not km, pace or move_to"
+        if any(x.day == a.day and x.session == "Strength" and x.status == "Done" for x in week):
+            return "strength training is already recorded on this day"
+        if a.duration_min and not (a.detail or "").strip():
+            return "describe the strength session and its exercises"
+        if a.duration_min and any(x.day == a.day and "race:" in x.session.lower() for x in week):
+            return "do not add strength training on race day"
+        if a.duration_min == 0 and not any(x.day == a.day and x.session == "Strength" and x.status == "Planned" for x in week):
+            return "there is no planned strength session to remove"
+        after = apply_adjustments(week, [a])
+        if sum(x.session == "Strength" and x.status in ("Planned", "Done") for x in after) > 2:
+            return "coach suggestions are limited to two strength sessions per week"
+        return None
+    if a.session == "Strength" or a.duration_min is not None:
+        return "use the strength action for strength sessions"
     if any(x.day == a.day and x.status == "Done" and x.session != "Strength" for x in week) and a.action != "skip":
         return f"a workout is already recorded on {a.day}"
     if a.action in ("shorten", "move", "skip") and a.action != "skip" and not _main_planned(week, a.day):
@@ -192,10 +222,16 @@ def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longe
             return "move_to must be a future date"
         if monday(a.move_to) != monday(a.day):
             return "moves must stay within the same week"
+        if a.move_to == a.day:
+            return "move_to must be a different day"
+        if any(x.day == a.move_to and x.status == "Done" and x.session != "Strength" for x in week):
+            return "a workout is already recorded on the destination day"
     km = a.km or 0
     if a.action in ("replace", "shorten"):
-        if km < 0 or km > 42.5:
+        if not 0 <= km <= 42.5:
             return "km must be between 0 and 42.5"
+        if a.action == "shorten" and (a.km is None or half(km) > _main_planned(week, a.day).km):
+            return "shorten must not increase the planned distance"
         cap = max(12.0, longest_recent * 1.15)
         if km > cap:
             return (
@@ -257,20 +293,21 @@ def estimate_threshold(runs: list[Run], today: date) -> float:
 def baseline(runs: list[Run], days: list[Day], today: date, threshold_s: float | None = None) -> Baseline:
     frm = today - 27 * DAY
     recent = [r for r in runs if r.type == "Run" and r.km and frm <= r.day <= today]
-    days = sorted(days, key=lambda d: d.day)
+    days = sorted((d for d in days if d.day <= today), key=lambda d: d.day)
+    fresh = [d for d in days if d.day >= today - DAY]
 
     def avg(xs: list[float]) -> float | None:
         xs = [x for x in xs if x is not None]
         return round(mean(xs), 1) if xs else None
 
-    last = days[-1] if days else None
+    last = next((d for d in reversed(fresh) if d.hrv_avg is not None), None)
     hrv_lo, hrv_hi = (last.hrv_lo, last.hrv_hi) if last else (None, None)
     if last and last.hrv_avg is not None and (hrv_lo is None or hrv_hi is None):
         hist = [d.hrv_avg for d in days if d.hrv_avg is not None and d.day >= today - 28 * DAY]
         if len(hist) >= 7:
             m, sd = mean(hist), pstdev(hist)
             hrv_lo, hrv_hi = round(m - sd, 1), round(m + sd, 1)
-    ratios = [d.load_ratio for d in days if d.load_ratio is not None]
+    ratios = [d.load_ratio for d in fresh if d.load_ratio is not None]
     return Baseline(
         today=today,
         next_monday=next_monday(today),
@@ -282,9 +319,11 @@ def baseline(runs: list[Run], days: list[Day], today: date, threshold_s: float |
         hrv=last.hrv_avg if last else None,
         hrv_lo=hrv_lo,
         hrv_hi=hrv_hi,
-        rhr7=avg([d.resting_hr for d in days if d.day >= today - 6 * DAY]),
+        rhr7=avg([d.resting_hr for d in days if d.day >= today - 6 * DAY])
+        if any(d.resting_hr is not None for d in fresh)
+        else None,
         rhr28=avg([d.resting_hr for d in days if d.day >= frm]),
-        sleep_last_min=next((d.sleep_min for d in reversed(days) if d.sleep_min), None),
+        sleep_last_min=next((d.sleep_min for d in reversed(fresh) if d.sleep_min), None),
         sleep7_min=avg([d.sleep_min for d in days if d.day >= today - 6 * DAY and d.sleep_min]),
     )
 
@@ -306,13 +345,19 @@ def readiness(b: Baseline) -> Readiness:
         reasons.append(f"resting HR is up {b.rhr7 - b.rhr28:.1f} bpm")
     status, factor = ("Ready", 1.0) if flags == 0 else ("Hold", 0.9) if flags == 1 else ("Back off", 0.75)
     contributors = readiness_contributors(b)
+    if not contributors:
+        return Readiness("Unknown", 1.0, 0, ["No usable readiness signals from today or yesterday; sync current health data."])
     score = zone = None
     if contributors:
         weights = {"Training load": 30, "Overnight HRV": 30, "Resting HR": 20, "Sleep": 20}
         tot = sum(weights[c.name] for c in contributors)
         score = round(sum(c.score * weights[c.name] for c in contributors) / tot)
         zone = "High" if score >= 80 else "Moderate" if score >= 60 else "Low" if score >= 40 else "Poor"
-    return Readiness(status, factor, flags, reasons or ["load, HRV and resting HR all look normal"], score, zone, contributors)
+    reasons = reasons or ["Available readiness signals show no warning flags"]
+    missing = {"Training load", "Overnight HRV", "Resting HR", "Sleep"} - {c.name for c in contributors}
+    if missing:
+        reasons.append("Unavailable or stale: " + ", ".join(sorted(missing)))
+    return Readiness(status, factor, flags, reasons, score, zone, contributors)
 
 
 def _level(score: float) -> str:
@@ -610,7 +655,7 @@ def race_plan(races: list[RaceIn], b: Baseline) -> list[Week]:
 
 
 def _strength(d: date) -> Session:
-    return Session(d, "Strength", detail="45 min, legs and core (single-leg work, calves, hips). Lighter in race weeks")
+    return Session(d, "Strength", detail="Legs and core (single-leg work, calves, hips). Lighter in race weeks", duration_min=45)
 
 
 def _lay(
@@ -756,11 +801,12 @@ def this_week(
             out.append(
                 Session(
                     a.day,
-                    a.sport,
+                    "Strength" if a.type == "Strength" else a.sport,
                     round(a.km, 2) if a.km else 0,
                     f"{fmt_pace(a.pace_s)} /km" if a.pace_s else "",
                     f"{a.duration_s // 60} min" + (f" · avg HR {a.avg_hr}" if a.avg_hr else "") if a.duration_s else "",
                     status="Done",
+                    duration_min=a.duration_s // 60 if a.duration_s and a.type == "Strength" else None,
                 )
             )
     ran_today = any(x.day == today for x in wk_runs)

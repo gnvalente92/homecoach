@@ -24,11 +24,18 @@ ADJUST_SCHEMA = {
     "type": "object",
     "properties": {
         "day": {"type": "string", "description": "YYYY-MM-DD of the planned day to change"},
-        "action": {"type": "string", "enum": ["replace", "shorten", "skip", "move"]},
+        "action": {"type": "string", "enum": ["replace", "shorten", "skip", "move", "strength"]},
+        "duration_min": {
+            "type": "integer",
+            "description": "strength: 1–60 minutes to add/update, or 0 to remove a planned strength session",
+        },
         "session": {"type": "string", "description": "replace: session name, e.g. 'Easy run', 'Tempo run', 'Long run'"},
         "km": {"type": "number", "description": "replace/shorten: distance in km"},
         "pace": {"type": "string", "description": "replace: target pace, e.g. '5:54–6:17 /km'"},
-        "detail": {"type": "string", "description": "replace: short workout description"},
+        "detail": {
+            "type": "string",
+            "description": "Workout description; for strength, include exercises and easy-to-follow instructions",
+        },
         "move_to": {"type": "string", "description": "move: new YYYY-MM-DD in the same week"},
         "reason": {"type": "string", "description": "One sentence the athlete will read: why this change"},
     },
@@ -41,6 +48,7 @@ def _fmt_sessions(items: list[dict]) -> str:
         "\n".join(
             f"- {x['day']} ({date.fromisoformat(str(x['day'])):%a}) [{x['status']}{', adjusted' if x.get('adjusted') else ''}] "
             f"{x['session']}{f' {x["km"]} km' if x.get('km') else ''}{f' @ {x["pace"]}' if x.get('pace') else ''}"
+            f"{f' {x["duration_min"]} min' if x.get('duration_min') else ''}"
             f"{f' — {x["detail"]}' if x.get('detail') else ''}"
             for x in items
         )
@@ -105,6 +113,15 @@ move within the same week). The app enforces limits; if a call is rejected, read
 smaller or don't change that day. The athlete accepts or dismisses each change. Don't re-propose changes
 that are already marked adjusted.
 
+Review strength training as well as running. Use action='strength' to add or update a strength session on
+a date, with duration_min and a concrete, conservative session description (exercises and simple instructions).
+This keeps any run on that day. Use duration_min=0 to remove a planned strength session. Consider recorded
+strength workouts, experience, equipment mentioned in check-ins, soreness, recovery and proximity to races.
+Ask about missing experience or equipment rather than assuming heavy weights or advanced exercises.
+The app limits suggestions to two strength sessions per week and 60 minutes per session, and rejects race-day
+strength additions. These are application limits, not a personalised prescription. Do not prescribe maximal
+lifts or treat pain. Reduce or omit strength when the check-ins or recovery signals call for it.
+
 Be conservative: with pain or illness, reduce or rest and suggest seeing a professional if it persists.
 Never increase the week beyond the plan. When nothing needs changing, say so and don't call the tool.
 
@@ -117,12 +134,11 @@ REVIEW_PROMPT = "It's the end of the week. Review how this week went against the
 
 
 def run(s: Settings, db: Db, plan: dict, today: date, messages: list[dict[str, str]], source: str, client=None) -> dict[str, Any]:
-    week_of = {x["day"]: "this" for x in plan["this_week"]["sessions"]} | {x["day"]: "next" for x in plan["next_week"]}
     weeks = {
         "this": ([_to_session(x) for x in plan["this_week"]["sessions"]], plan["this_week"]["target_km"]),
         "next": ([_to_session(x) for x in plan["next_week"]], plan.get("next_week_target_km") or 0),
     }
-    longest = max([w["long_km"] for w in plan["road"] if w["kind"] == "Actual"] + [plan["baseline"]["longest_km"], 0])
+    longest = plan["baseline"]["longest_km"]
     created: list[CoachSuggestion] = []
 
     def propose(args: dict) -> str:
@@ -131,9 +147,10 @@ def run(s: Settings, db: Db, plan: dict, today: date, messages: list[dict[str, s
             move_to = date.fromisoformat(str(args["move_to"])) if args.get("move_to") else None
         except ValueError as e:
             raise ToolRejected("dates must be YYYY-MM-DD") from e
-        which = week_of.get(day) or week_of.get(day.isoformat())
-        if which is None:
+        next_monday = E.next_monday(today)
+        if not E.monday(today) <= day < next_monday + timedelta(days=7):
             raise ToolRejected("you can only change days in this week or next week")
+        which = "this" if day < next_monday else "next"
         a = E.Adjustment(
             day,
             str(args.get("action")),
@@ -143,6 +160,7 @@ def run(s: Settings, db: Db, plan: dict, today: date, messages: list[dict[str, s
             args.get("detail"),
             move_to,
             str(args.get("reason") or "").strip(),
+            args.get("duration_min"),
         )
         if not a.reason:
             raise ToolRejected("give a one-sentence reason")
@@ -159,6 +177,7 @@ def run(s: Settings, db: Db, plan: dict, today: date, messages: list[dict[str, s
             pace=a.pace,
             detail=a.detail,
             move_to=a.move_to,
+            duration_min=a.duration_min,
             reason=a.reason,
             source=source,
         )
@@ -193,6 +212,7 @@ def _to_session(x: dict) -> E.Session:
         x.get("status") or "Planned",
         x.get("adjusted", False),
         x.get("reason", ""),
+        x.get("duration_min"),
     )
 
 
@@ -206,6 +226,7 @@ def suggestion_out(x: CoachSuggestion) -> dict:
         "pace": x.pace,
         "detail": x.detail,
         "move_to": x.move_to,
+        "duration_min": x.duration_min,
         "reason": x.reason,
         "source": x.source,
         "status": x.status,

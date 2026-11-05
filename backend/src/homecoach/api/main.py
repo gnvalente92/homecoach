@@ -13,10 +13,8 @@ from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
 from homecoach import __version__
@@ -50,7 +48,9 @@ async def basic_auth(request: Request, call_next):
         if header.lower().startswith("basic "):
             try:
                 user, _, pwd = base64.b64decode(header[6:]).decode().partition(":")
-                ok = secrets.compare_digest(user, s.auth_user) and secrets.compare_digest(pwd, s.auth_password.get_secret_value())
+                ok = secrets.compare_digest(user.encode(), s.auth_user.encode()) and secrets.compare_digest(
+                    pwd.encode(), s.auth_password.get_secret_value().encode()
+                )
             except ValueError:
                 ok = False
         if not ok:
@@ -132,7 +132,11 @@ def jsonable(x):
 
 
 @app.get("/api/health")
-def health() -> dict:
+def health(db: Session = Db) -> dict:
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as e:
+        raise HTTPException(503, "database unavailable") from e
     return {"ok": True, "version": __version__}
 
 
@@ -158,11 +162,33 @@ def _resync_run() -> None:
     from homecoach.db import session_scope
 
     try:
+        _resync.update(stages={k: "pending" for k in ("sync", "plan", "coach", "outlooks")}, warnings=[])
         _resync.update(step="Re-reading your whole history from COROS")
+        _resync["stages"]["sync"] = "running"
         stats = run_once(full=True)
+        if stats and stats.get("mode") == "skipped":
+            raise RuntimeError("Another sync is running; wait for it to finish before requesting a full resync.")
         _resync["stats"] = stats
+        _resync["stages"]["sync"] = "completed"
+        _resync.update(step="Rebuilding the training plan")
+        _resync["stages"]["plan"] = "running"
+        with session_scope() as db:
+            compute_plan(db)
+        _resync["stages"]["plan"] = "completed"
         s = get_settings()
         if llm.enabled(s):
+            _resync.update(step="Reviewing the updated plan and refreshing coach recommendations")
+            _resync["stages"]["coach"] = "running"
+            try:
+                review = run_review()
+                _resync["coach_suggestions"] = len(review["suggestions"])
+                _resync["stages"]["coach"] = "completed"
+            except Exception:
+                log.exception("coach refresh during full resync failed")
+                _resync["stages"]["coach"] = "failed"
+                _resync["warnings"].append("Coach recommendations could not be refreshed; previous suggestions were retained.")
+            _resync["stages"]["outlooks"] = "running"
+            failed_outlooks = 0
             with session_scope() as db:
                 races = [r for r in db.scalars(select(Race).where(Race.day >= today())) if r.goal_time_s]
                 for i, r in enumerate(races, 1):
@@ -171,11 +197,26 @@ def _resync_run() -> None:
                         outlook.interpret(s, db, r, today(), force=True)
                         db.commit()
                     except Exception as e:  # one race failing shouldn't stop the rest
+                        db.rollback()
+                        failed_outlooks += 1
                         log.warning("race outlook for %s failed: %s", r.name, e)
+            _resync["stages"]["outlooks"] = "failed" if failed_outlooks else "completed"
+            if failed_outlooks:
+                _resync["warnings"].append(f"{failed_outlooks} race outlook(s) could not be refreshed.")
+        else:
+            _resync["stages"].update(coach="skipped", outlooks="skipped")
+            _resync["warnings"].append(
+                "AI is disabled: the rule-based plan was rebuilt; coach recommendations and AI outlooks were skipped."
+            )
         _resync.update(error=None)
     except Exception as e:
         log.exception("full resync failed")
         _resync.update(error=str(e))
+        for stage, status in _resync.get("stages", {}).items():
+            if status == "running":
+                _resync["stages"][stage] = "failed"
+            elif status == "pending":
+                _resync["stages"][stage] = "skipped"
     finally:
         _resync.update(running=False, step=None, finished_at=datetime.now().isoformat(timespec="seconds"))
         _resync_lock.release()
@@ -579,11 +620,19 @@ def run_review(source: str = "review") -> dict:
     """Weekly review (also used by the collector). Uses its own DB session."""
     from homecoach import coach
     from homecoach.db import session_scope
+    from homecoach.locking import execution_lock
 
-    with _review_lock, session_scope() as db:
-        return coach.run(
+    with _review_lock, execution_lock(get_settings().data_dir / ".coach-review.lock") as acquired, session_scope() as db:
+        if not acquired:
+            raise RuntimeError("another coach review is running")
+        pending = list(db.scalars(select(CoachSuggestion.id).where(CoachSuggestion.status == "pending")))
+        result = coach.run(
             get_settings(), db, jsonable(compute_plan(db)), today(), [{"role": "user", "content": coach.REVIEW_PROMPT}], source
         )
+        # A failed model call rolls back this transaction and retains the old recommendations.
+        if pending:
+            db.execute(delete(CoachSuggestion).where(CoachSuggestion.id.in_(pending), CoachSuggestion.status == "pending"))
+        return result
 
 
 @app.get("/api/coach")
@@ -657,9 +706,23 @@ class SuggestionStatus(BaseModel):
 def set_suggestion(sid: int, body: SuggestionStatus, db: Session = Db) -> dict:
     from homecoach import coach
 
+    # Serialise decisions across web workers until the dependency commits this transaction.
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(8742001)"))
     x = db.get(CoachSuggestion, sid)
     if not x:
         raise HTTPException(404, "suggestion not found")
+    if body.status == "accepted" and x.status != "accepted":
+        p = compute_plan(db)
+        b = p["baseline"]
+        if not E.monday(today()) <= x.day < b.next_monday + timedelta(days=7):
+            raise HTTPException(409, "suggestion is outside this week and next week; request a new review")
+        week = p["this_week"]["sessions"] if x.day < b.next_monday else p["next_week"]
+        target = p["this_week"]["target_km"] if x.day < b.next_monday else p["next_week_target_km"]
+        a = E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min)
+        why = E.check_adjustment(a, week, target, b.longest_km, today())
+        if why:
+            raise HTTPException(409, why)
     x.status = body.status
     return jsonable(coach.suggestion_out(x))
 
@@ -684,9 +747,9 @@ def accepted_adjustments(db: Session, start: date) -> list[E.Adjustment]:
     rows = db.scalars(
         select(CoachSuggestion)
         .where(CoachSuggestion.status == "accepted", CoachSuggestion.day >= start)
-        .order_by(CoachSuggestion.created_at)
+        .order_by(CoachSuggestion.created_at, CoachSuggestion.id)
     )
-    return [E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason) for x in rows]
+    return [E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min) for x in rows]
 
 
 def compute_plan(db: Session) -> dict:
@@ -701,9 +764,20 @@ def compute_plan(db: Session) -> dict:
     weeks = E.race_plan(races, b)
     tw, done_km, target_km = E.this_week(runs, b, races, r, done=runs)
     nw = E.next_week(b, weeks, r)
+    next_target = round(sum(x.km for x in nw if x.session != "Strength"), 1)
     adj = accepted_adjustments(db, E.monday(t))
-    tw = E.apply_adjustments(tw, [a for a in adj if a.day < b.next_monday])
-    nw = E.apply_adjustments(nw, [a for a in adj if a.day >= b.next_monday])
+    inactive = []
+    for a in adj:
+        if a.day < t or a.day >= b.next_monday + timedelta(days=7):
+            continue
+        current, target = (tw, target_km) if a.day < b.next_monday else (nw, next_target)
+        why = E.check_adjustment(a, current, target, b.longest_km, t)
+        if why:
+            inactive.append({"day": a.day, "reason": why})
+        elif a.day < b.next_monday:
+            tw = E.apply_adjustments(tw, [a])
+        else:
+            nw = E.apply_adjustments(nw, [a])
     tr = E.target_race(races, t)
     return {
         "athlete_name": get_settings().athlete_name,
@@ -712,7 +786,8 @@ def compute_plan(db: Session) -> dict:
         "target_race": tr,
         "this_week": {"sessions": tw, "done_km": done_km, "target_km": target_km},
         "next_week": nw,
-        "next_week_target_km": round(sum(x.km for x in E.next_week(b, weeks, r) if x.session != "Strength"), 1),
+        "next_week_target_km": next_target,
+        "inactive_suggestions": inactive,
         "race_plan": weeks,
         "road": E.road(runs, weeks, b),
         "shape": {**E.endurance_shape(runs, t, tr.distance_km), "race": tr.name} if tr else None,
@@ -733,11 +808,8 @@ def fitness(days: int | None = Query(84, ge=7), db: Session = Db) -> list[dict]:
 
 # ---- web UI -------------------------------------------------------------------------------------
 
-_web = get_settings().web_dir
-if (_web / "index.html").exists():
-    app.mount("/assets", StaticFiles(directory=_web / "assets", check_dir=False), name="assets")
+from homecoach.api.static import mount_web  # noqa: E402
+from homecoach.api.training import router as training_router  # noqa: E402
 
-    @app.get("/{path:path}", include_in_schema=False)
-    def spa(path: str) -> FileResponse:
-        f = _web / path
-        return FileResponse(f if path and f.is_file() else _web / "index.html")
+app.include_router(training_router)
+mount_web(app, get_settings().web_dir)

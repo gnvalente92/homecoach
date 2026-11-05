@@ -364,7 +364,7 @@ def test_long_ranges_are_fetched_in_windows():
     assert [a for n, a in calls if n == "queryDailyHealthData"] == [{"days": 365}]  # 'last N days' tools: one call
 
 
-def test_first_mcp_sync_is_full_even_after_the_web_api(monkeypatch):
+def test_first_mcp_sync_is_full_even_after_the_web_api(monkeypatch, tmp_path):
     from contextlib import contextmanager
 
     from homecoach.collector import main as collector
@@ -378,6 +378,7 @@ def test_first_mcp_sync_is_full_even_after_the_web_api(monkeypatch):
 
     s = api.get_settings()
     monkeypatch.setattr(s, "provider", "coros-mcp")
+    monkeypatch.setattr(s, "data_dir", tmp_path)
     monkeypatch.setattr(collector, "session_scope", fake_scope)
     monkeypatch.setattr(collector, "import_fit_inbox", lambda *_: 0)
     monkeypatch.setattr(collector, "get_provider", lambda *_: type("P", (), {"s": type("S", (), {"state": {}})()})())
@@ -397,9 +398,11 @@ def test_first_mcp_sync_is_full_even_after_the_web_api(monkeypatch):
 
 def test_resync_endpoint(client, monkeypatch):
     import threading
+    from contextlib import contextmanager
 
     import homecoach.collector.main as collector
 
+    monkeypatch.setattr("homecoach.db.session_scope", contextmanager(api.app.dependency_overrides[api.get_session]))
     gate = threading.Event()
     monkeypatch.setattr(collector, "run_once", lambda full: gate.wait(5) and {"mode": "full", "activities_seen": 12, "days": 700})
     r = client.post("/api/resync")

@@ -1,6 +1,7 @@
 import './style.css';
 import * as d3 from 'd3';
 import { timeChart, scatter, parse, fInt, f1, fDay, color, css } from './charts.js';
+import { trainingPages } from './training.js';
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $('#view');
@@ -8,7 +9,10 @@ const view = $('#view');
 const show = (...parts) => view.replaceChildren(...parts.flat().filter((x) => x != null && x !== false));
 const api = async (path, opts) => {
   const r = await fetch(`/api${path}`, { headers: { 'content-type': 'application/json' }, ...opts });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => ({}))).detail;
+    throw new Error(Array.isArray(detail) ? detail.map((item) => item.msg).join('; ') : detail || r.statusText);
+  }
   return r.status === 204 ? null : r.json();
 };
 const h = (tag, attrs = {}, ...kids) => {
@@ -51,6 +55,7 @@ function sessionsGrid(list, todayIso) {
     h('div', { class: 'day' }, h('span', {}, fDay(parse(s.day))), h('span', {}, s.adjusted ? h('span', { class: 'pill adj', title: s.reason }, 'coach') : s.status === 'Planned' ? '' : s.status)),
     h('div', { class: 'name' }, s.session),
     s.km ? h('div', { class: 'km' }, `${s.km} km`) : null,
+    s.duration_min && s.status !== 'Done' ? h('div', { class: 'km' }, `${s.duration_min} min`) : null,
     s.pace ? h('div', { class: 'pace' }, s.pace) : null,
     s.detail ? h('div', { class: 'detail' }, s.detail) : null,
     s.adjusted && s.reason && s.status !== 'Rest' ? h('div', { class: 'detail adj-reason' }, `Coach: ${s.reason}`) : null)));
@@ -106,7 +111,8 @@ async function today() {
         ring(r.score, zc),
         h('div', {},
           h('div', { class: 'zone', style: `color:${zc}` }, r.zone || r.status),
-          h('div', { class: 'note', style: 'margin:2px 0 12px' }, `Plan volume at ${Math.round(r.factor * 100)}%`),
+          h('div', { class: 'note', style: 'margin:2px 0 12px' }, r.status === 'Unknown' ? 'No readiness adjustment: current signals are missing.' : `Plan volume at ${Math.round(r.factor * 100)}%`),
+          h('div', { class: 'note' }, r.reasons.join('. ')),
           h('div', { class: 'contribs' }, r.contributors.map((c) => h('div', { class: 'contrib' },
             h('div', { class: 'contrib-top' }, h('span', {}, c.name), h('b', {}, c.value)),
             h('div', { class: 'bar' }, h('div', { style: `width:${c.score}%;background:${levelColor(c.level)}` })),
@@ -191,15 +197,21 @@ state.coachChat = state.coachChat || [];
 async function coachPanel(onChange) {
   const st = await api('/coach').catch(() => ({ enabled: false, suggestions: [], notes: [], checkins: [] }));
   const actionText = (x) => ({ skip: 'Skip', shorten: `Shorten to ${x.km} km`, move: `Move to ${x.move_to ? d3.utcFormat('%a')(parse(x.move_to)) : '?'}`,
+    strength: x.duration_min ? `Strength · ${x.duration_min} min` : 'Skip strength',
     replace: `${x.session}${x.km ? ` · ${x.km} km` : ''}${x.pace ? ` · ${x.pace}` : ''}` }[x.action] || x.action);
   const pending = st.suggestions.filter((x) => x.status === 'pending');
   const decided = st.suggestions.filter((x) => x.status !== 'pending').slice(0, 4);
   const sugCard = (x) => h('div', { class: `proposal ${x.status}` },
     h('div', {}, h('div', { class: 'next-name' }, `${fDay(parse(x.day))}: ${actionText(x)}`),
-      x.detail && x.action === 'replace' ? h('div', { class: 'note', style: 'margin:2px 0' }, x.detail) : null,
+      x.detail && ['replace', 'strength'].includes(x.action) ? h('div', { class: 'note', style: 'margin:2px 0' }, x.detail) : null,
       h('div', { class: 'note', style: 'margin:2px 0 0' }, x.reason)),
     x.status === 'pending' ? h('div', { class: 'row', style: 'margin:0;gap:6px' },
-      h('button', { class: 'primary', onclick: async () => { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'accepted' }) }); resetCache(); onChange(); } }, 'Accept'),
+      h('button', { class: 'primary', onclick: async (e) => {
+        const button = e.currentTarget;
+        button.disabled = true;
+        try { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'accepted' }) }); resetCache(); onChange(); }
+        catch (err) { button.disabled = false; alert(`This suggestion cannot be applied: ${err.message}`); }
+      } }, 'Accept'),
       h('button', { class: 'link', onclick: async () => { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'dismissed' }) }); onChange(); } }, 'Dismiss'))
       : h('span', { class: 'note', style: 'margin:0' }, x.status === 'accepted' ? 'Accepted ✓' : 'Dismissed'));
   const log = h('div', { class: 'chat-log' });
@@ -256,6 +268,9 @@ async function plan() {
       return seg;
     })(), week === 'this' ? h('span', { class: 'note', style: 'margin:0' }, `${p.this_week.done_km} km done of ~${p.this_week.target_km} km`) : null),
     sessionsGrid(list, cfg.today),
+    p.inactive_suggestions?.length ? h('div', { class: 'banner bad' },
+      h('div', {}, h('b', {}, 'Some accepted coach changes no longer fit the current plan'),
+        p.inactive_suggestions.map((x) => h('p', { class: 'note' }, `${x.day}: ${x.reason}`)))) : null,
     h('div', { style: 'height:16px' }),
     await coachPanel(() => { resetCache(); plan(); }),
     race ? h('h2', {}, 'Road to race day') : null,
@@ -579,22 +594,23 @@ async function resyncWatch() {
   state.resyncSeen = false;
   const s = st.stats || {};
   resetCache(); syncStatus(); route();
-  el.replaceChildren(h('div', { class: `banner${st.error ? ' bad' : ''}` },
-    h('div', {}, h('b', {}, st.error ? 'Full resync failed' : 'Full resync finished'),
+  const partial = Object.values(st.stages || {}).includes('failed');
+  el.replaceChildren(h('div', { class: `banner${st.error || partial ? ' bad' : ''}` },
+    h('div', {}, h('b', {}, st.error ? 'Full resync failed' : partial ? 'Full resync finished with issues' : 'Full resync finished'),
       h('div', { class: 'note', style: 'margin:2px 0 0' }, st.error ? st.error
-        : st.stats ? `${s.activities_seen ?? 0} activities (${s.activities_new ?? 0} new) and ${s.days ?? 0} days of health data. Plan and race outlooks are up to date.`
-          : 'Nothing to sync from: check the data source in .env.')),
+        : `${st.stats ? `${s.activities_seen ?? 0} activities (${s.activities_new ?? 0} new) and ${s.days ?? 0} days of health data.` : 'FIT inbox checked; no provider data synced.'} Training plan rebuilt.${st.stages?.coach === 'completed' ? ` Coach review complete: ${st.coach_suggestions} new recommendation(s).` : ''}`),
+      (st.warnings || []).map((warning) => h('p', { class: 'note' }, warning))),
     h('button', { class: 'link', onclick: () => el.replaceChildren() }, 'Dismiss')));
 }
 $('#resync').addEventListener('click', async () => {
-  if (!confirm('Run a full resync?\n\nThis re-reads your whole history from COROS (about 2 years), then refreshes your training plan and race outlooks. It takes a few minutes. Nothing is deleted.')) return;
+  if (!confirm('Run a full resync?\n\nThis re-reads your history, rebuilds the training plan and runs a fresh coach review and race outlooks when AI is enabled. Pending recommendations are replaced after a successful review; accepted changes and check-ins are kept. It can take a few minutes.')) return;
   try { await api('/resync', { method: 'POST' }); state.resyncSeen = true; resyncWatch(); }
   catch (e) { $('#notice').replaceChildren(h('div', { class: 'banner bad' }, h('div', {}, h('b', {}, 'Couldn’t start the resync'), h('div', { class: 'note' }, e.message)))); }
 });
 
 // ---- router -----------------------------------------------------------------------------------
 
-const pages = { today, overview, plan, races, trends, recovery };
+const pages = { today, overview, plan, races, trends, recovery, ...trainingPages({ api, h, show, card, resetCache, pace, hm }) };
 async function route() {
   const name = location.hash.slice(1) || 'today';
   document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === `#${name}`));
@@ -605,7 +621,8 @@ async function syncStatus() {
   try {
     const cfg = await api('/config');
     const st = Object.values(cfg.sync || {}).filter((x) => x?.last_sync).sort((a, b) => (a.last_sync < b.last_sync ? 1 : -1))[0];
-    $('#sync').replaceChildren(st?.last_sync ? `Synced ${d3.timeFormat('%H:%M')(new Date(st.last_sync))}` : 'Waiting for first sync',
+    const status = cfg.sync?.['collector-status'];
+    $('#sync').replaceChildren(status?.error ? `Last sync failed (${status.error}) · ` : '', st?.last_sync ? `Synced ${d3.timeFormat('%H:%M')(new Date(st.last_sync))}` : 'Waiting for first sync',
       state.coros?.connected ? h('button', { class: 'link', title: `Connected to COROS since ${state.coros.connected_at ? new Date(state.coros.connected_at).toLocaleDateString() : '?'}. Click to disconnect.`,
         onclick: async () => { if (confirm('Disconnect COROS? Syncing stops until you connect again.')) { await api('/coros/disconnect', { method: 'POST' }); corosBanner().then(syncStatus); } } }, '· COROS ✓') : '');
   } catch { $('#sync').textContent = ''; }
