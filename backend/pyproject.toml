@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "homecoach"
+version = "0.1.0"
+description = "Self-hosted training dashboard and plan engine for wearable data"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "sqlalchemy>=2.0",
+  "psycopg[binary]>=3.2",
+  "alembic>=1.13",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "httpx>=0.27",
+  "apscheduler>=3.10,<4",
+  "fitdecode>=0.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "respx>=0.21"]
+
+[project.scripts]
+homecoach = "homecoach.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/homecoach"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
