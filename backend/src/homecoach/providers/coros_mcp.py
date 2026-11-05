@@ -33,6 +33,7 @@ TOOLS = {
 
 
 WINDOW = 90  # days per request for date-range tools
+WINDOW_BY_KIND = {"hrv": 7}  # querySleepHrv covers at most 7 days per request
 
 
 # ---- small helpers -------------------------------------------------------------------------------
@@ -229,11 +230,12 @@ class CorosMCPProvider:
             log.info("COROS MCP has no %s tool; skipping", kind)
             return ""
         props = (self.s.tools.get(tool, {}).get("inputSchema") or {}).get("properties", {})
-        if "startDate" not in props or (end - start).days < WINDOW:
+        window = WINDOW_BY_KIND.get(kind, WINDOW)
+        if "startDate" not in props or (end - start).days < window:
             return self.s.call(tool, self._args(tool, start, end))
         parts, a = [], start
         while a <= end:
-            b = min(end, a + timedelta(days=WINDOW - 1))
+            b = min(end, a + timedelta(days=window - 1))
             parts.append(self.s.call(tool, self._args(tool, a, b)))
             a = b + timedelta(days=1)
         return "\n\n".join(parts)
