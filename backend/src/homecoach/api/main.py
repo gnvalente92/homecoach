@@ -3,23 +3,35 @@
 from __future__ import annotations
 
 import base64
+import html
 import secrets
 import threading
 from collections import defaultdict
 from datetime import date, timedelta
 from typing import Literal
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from homecoach import __version__
 from homecoach.config import get_settings
 from homecoach.db import get_session
-from homecoach.models import Activity, CheckIn, CoachNote, CoachSuggestion, DailyMetric, FitnessSnapshot, Race, SyncState
+from homecoach.models import (
+    Activity,
+    CheckIn,
+    CoachNote,
+    CoachSuggestion,
+    DailyMetric,
+    FitnessSnapshot,
+    Race,
+    RaceInsight,
+    SyncState,
+)
 from homecoach.plan import engine as E
 
 app = FastAPI(title="homecoach", version=__version__)
@@ -251,8 +263,16 @@ def summary(days: int | None = Query(84, ge=7), db: Session = Db) -> dict:
         **cur,
         "previous": prev if any(prev[k] for k in ("run_km", "sessions", "avg_steps")) else None,
         "vo2max": snap.vo2max if snap else None,
+        "predictions": _predictions(db),
         "threshold_pace": E.fmt_pace(th) if th else None,
     }
+
+
+def _predictions(db: Session) -> dict | None:
+    from homecoach.outlook import latest_predictions
+
+    p = latest_predictions(db)
+    return {k: fmt_time(v) for k, v in p.items()} if p else None
 
 
 # ---- races --------------------------------------------------------------------------------------
@@ -326,7 +346,53 @@ def delete_race(race_id: int, db: Session = Db) -> None:
     r = db.get(Race, race_id)
     if not r:
         raise HTTPException(404, "race not found")
+    db.execute(delete(RaceInsight).where(RaceInsight.race_id == race_id))
     db.delete(r)
+
+
+# ---- race outlook -------------------------------------------------------------------------------
+
+
+def outlook_out(db: Session, r: Race) -> dict:
+    from homecoach import outlook
+
+    f = jsonable(outlook.facts_for(db, r, today()))
+    ins = outlook.latest(db, r.id)
+    f["insight"] = {"text": ins.text, "day": ins.day, "today": ins.day == today()} if ins else None
+    return f
+
+
+@app.get("/api/races/outlook")
+def races_outlook(db: Session = Db) -> dict:
+    from homecoach import llm
+
+    races = db.scalars(select(Race).where(Race.day >= today()).order_by(Race.day))
+    return {"llm": llm.enabled(get_settings()), "races": [outlook_out(db, r) for r in races]}
+
+
+class OutlookBody(BaseModel):
+    force: bool = False
+
+
+@app.post("/api/races/{race_id}/outlook")
+def race_outlook_ai(race_id: int, body: OutlookBody | None = None, db: Session = Db) -> dict:
+    """Ask the local AI to interpret the outlook (cached for the day unless force)."""
+    from homecoach import llm, outlook
+
+    s = get_settings()
+    r = db.get(Race, race_id)
+    if not r:
+        raise HTTPException(404, "race not found")
+    if not llm.enabled(s):
+        raise HTTPException(409, "the local AI is off (set HC_LLM_PROVIDER)")
+    if not r.goal_time_s:
+        raise HTTPException(400, "set a goal time for this race first")
+    try:
+        outlook.interpret(s, db, r, today(), force=bool(body and body.force))
+    except llm.LLMError as e:
+        raise HTTPException(502, str(e)) from e
+    db.commit()
+    return outlook_out(db, r)
 
 
 # ---- race assistant -----------------------------------------------------------------------------
@@ -361,6 +427,88 @@ def assistant_chat(body: ChatBody, db: Session = Db) -> dict:
         return jsonable(chat(get_settings(), [m.model_dump() for m in body.messages], today(), races))
     except LLMError as e:
         raise HTTPException(503, str(e)) from e
+
+
+# ---- COROS connection (official MCP) -------------------------------------------------------------
+
+FALLBACK_REDIRECT = "http://localhost/homecoach-coros-callback"
+
+
+class ConnectBody(BaseModel):
+    paste: bool = False
+
+
+class PasteBody(BaseModel):
+    url: str = Field(max_length=4000)
+
+
+def _start_first_sync() -> None:
+    from homecoach.collector.main import run_once
+
+    threading.Thread(target=run_once, kwargs={"full": False}, daemon=True).start()
+
+
+@app.get("/api/coros")
+def coros_status(db: Session = Db) -> dict:
+    from homecoach import coros_auth
+
+    return {"provider": get_settings().provider, **coros_auth.status(db)}
+
+
+@app.post("/api/coros/connect")
+def coros_connect(body: ConnectBody, request: Request, db: Session = Db) -> dict:
+    from homecoach import coros_auth
+    from homecoach.mcp_client import MCPError
+
+    redirect = str(request.base_url).rstrip("/") + "/api/coros/callback"
+    try:
+        url = coros_auth.start(get_settings(), db, redirect, FALLBACK_REDIRECT, use_fallback=body.paste)
+    except (MCPError, httpx.HTTPError) as e:
+        raise HTTPException(502, f"Couldn't start the COROS login: {e}") from e
+    return {"url": url}
+
+
+@app.get("/api/coros/callback", include_in_schema=False)
+def coros_callback(db: Session = Db, code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    from fastapi.responses import HTMLResponse, RedirectResponse
+
+    from homecoach import coros_auth
+    from homecoach.mcp_client import MCPError
+
+    if error or not code:
+        msg = error_description or error or "no authorization code returned"
+        return HTMLResponse(
+            f"<p>COROS login didn't complete: {html.escape(msg)}</p><p><a href='/'>Back to homecoach</a></p>", 400
+        )
+    try:
+        coros_auth.finish(db, code, state)
+    except (MCPError, httpx.HTTPError) as e:
+        return HTMLResponse(f"<p>{html.escape(str(e))}</p><p><a href='/'>Back to homecoach</a></p>", 400)
+    db.commit()
+    _start_first_sync()
+    return RedirectResponse("/#today", status_code=303)
+
+
+@app.post("/api/coros/paste")
+def coros_paste(body: PasteBody, db: Session = Db) -> dict:
+    from homecoach import coros_auth
+    from homecoach.mcp_client import MCPError
+
+    try:
+        coros_auth.finish_from_pasted_url(db, body.url)
+    except (MCPError, httpx.HTTPError) as e:
+        raise HTTPException(400, str(e)) from e
+    db.commit()
+    _start_first_sync()
+    return coros_auth.status(db)
+
+
+@app.post("/api/coros/disconnect")
+def coros_disconnect(db: Session = Db) -> dict:
+    from homecoach import coros_auth
+
+    coros_auth.disconnect(db)
+    return coros_auth.status(db)
 
 
 # ---- coach ------------------------------------------------------------------------------------

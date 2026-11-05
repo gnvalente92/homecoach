@@ -74,6 +74,15 @@ with session_scope() as s:
                 },
             ),
         )
-    upsert_fitness(s, FitnessRecord(today, vo2max=52, threshold_pace_s=290, running_level=78))
-    s.add(Race(name="Corrida Sporting", day=today + timedelta(days=10), distance_km=10, goal_time_s=49 * 60, priority="A"))
+    upsert_fitness(
+        s,
+        FitnessRecord(
+            today,
+            vo2max=52,
+            threshold_pace_s=290,
+            running_level=78,
+            predictions={"5k": 1392, "10k": 2955, "half": 6560, "marathon": 13900},
+        ),
+    )
+    s.add(Race(name="City 10K", day=today + timedelta(days=10), distance_km=10, goal_time_s=49 * 60, priority="A"))
 print("seeded")

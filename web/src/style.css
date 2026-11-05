@@ -124,3 +124,23 @@ button:disabled { opacity: .6; cursor: default; }
 .proposal.accepted { border-left-color: var(--good); opacity: .75; } .proposal.dismissed { border-left-color: var(--grey); opacity: .55; }
 .proposal { margin-top: 8px; }
 details summary { cursor: pointer; }
+
+/* race outlook */
+.verdict { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 99px; background: var(--line); white-space: nowrap; }
+.verdict.good { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); }
+.verdict.reach { background: color-mix(in srgb, var(--c1) 22%, transparent); color: var(--c1); }
+.verdict.stretch { background: color-mix(in srgb, var(--fair) 22%, transparent); color: var(--fair); }
+.verdict.far { background: color-mix(in srgb, var(--poor) 22%, transparent); color: var(--poor); }
+.verdict-line { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; text-decoration: none; }
+.facts { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); margin: 10px 0 12px; }
+.fact .label { margin-bottom: 2px; }
+.fact-v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.outlook .coach-note { margin-top: 4px; }
+
+/* COROS connect banner */
+#banner:empty { display: none; }
+.banner { max-width: 1140px; margin: 16px auto 0; padding: 14px 18px; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between;
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius); }
+.banner form, .banner .error { flex-basis: 100%; }
+#banner { padding: 0 20px; }
+.sync .link { font-size: 12px; }
