@@ -128,3 +128,38 @@ def test_road_has_actual_then_planned(base):
     rows = E.road(RUNS, E.race_plan(races, base), base)
     assert [r["kind"] for r in rows] == ["Actual"] * 8 + ["Planned"]
     assert rows[7]["phase"] == "This week so far" and rows[7]["total_km"] == pytest.approx(12.1, abs=0.05)
+
+
+def test_readiness_score_and_contributors(base):
+    r = E.readiness(base)
+    assert (
+        r.score == 100
+        and r.zone == "High"
+        and {c.name for c in r.contributors} == {"Training load", "Overnight HRV", "Resting HR"}
+    )
+    tired = E.Baseline(**{**base.__dict__, "load_ratio": 1.55, "hrv": 30, "rhr7": 58, "rhr28": 54, "sleep_last_min": 300})
+    r2 = E.readiness(tired)
+    assert r2.score < 40 and r2.zone == "Poor" and all(c.level != "good" for c in r2.contributors)
+
+
+def test_performance_chart():
+    start = date(2026, 1, 1)
+    loads = {start + timedelta(days=i): 60.0 for i in range(120)}
+    rows = E.performance(loads, start + timedelta(days=60), start + timedelta(days=140))
+    steady = rows[0]
+    assert 40 < steady["fitness"] < 60 and steady["fatigue"] > steady["fitness"] and steady["form"] < 0
+    rested = rows[-1]  # 20 days without load
+    assert rested["form"] > 0 and rested["zone"] in ("Fresh", "Transition") and rested["ramp"] < 0
+
+
+def test_activity_load_fallback():
+    assert E.activity_load(3600, 150, 95) == 95
+    assert 30 < E.activity_load(3600, 150, None) < 80
+    assert E.activity_load(None, None, None) == 0
+
+
+def test_endurance_shape():
+    runs = [E.Run(TODAY - timedelta(days=i), 10) for i in range(1, 42, 2)]  # ~35 km/week, longest 10
+    s = E.endurance_shape(runs, TODAY, 10)
+    assert s["weekly_target"] == 40 and s["pct"] < 100 and s["longest_km"] == 10
+    assert E.endurance_shape(runs, TODAY, 42.2)["pct"] < s["pct"]

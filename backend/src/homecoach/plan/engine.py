@@ -47,6 +47,7 @@ class Day:
     hrv_lo: float | None = None
     hrv_hi: float | None = None
     load_ratio: float | None = None
+    sleep_min: int | None = None
 
 
 @dataclass
@@ -76,6 +77,17 @@ class Baseline:
     hrv_hi: float | None
     rhr7: float | None
     rhr28: float | None
+    sleep_last_min: int | None = None
+    sleep7_min: float | None = None
+
+
+@dataclass
+class Contributor:
+    name: str
+    value: str
+    baseline: str
+    score: int  # 0-100
+    level: str  # good | fair | poor
 
 
 @dataclass
@@ -84,6 +96,9 @@ class Readiness:
     factor: float
     flags: int
     reasons: list[str] = field(default_factory=list)
+    score: int | None = None  # 0-100, weighted from contributors
+    zone: str | None = None  # High | Moderate | Low | Poor
+    contributors: list[Contributor] = field(default_factory=list)
 
 
 @dataclass
@@ -183,6 +198,8 @@ def baseline(runs: list[Run], days: list[Day], today: date, threshold_s: float |
         hrv_hi=hrv_hi,
         rhr7=avg([d.resting_hr for d in days if d.day >= today - 6 * DAY]),
         rhr28=avg([d.resting_hr for d in days if d.day >= frm]),
+        sleep_last_min=next((d.sleep_min for d in reversed(days) if d.sleep_min), None),
+        sleep7_min=avg([d.sleep_min for d in days if d.day >= today - 6 * DAY and d.sleep_min]),
     )
 
 
@@ -202,7 +219,119 @@ def readiness(b: Baseline) -> Readiness:
         flags += 1
         reasons.append(f"resting HR is up {b.rhr7 - b.rhr28:.1f} bpm")
     status, factor = ("Ready", 1.0) if flags == 0 else ("Hold", 0.9) if flags == 1 else ("Back off", 0.75)
-    return Readiness(status, factor, flags, reasons or ["load, HRV and resting HR all look normal"])
+    contributors = readiness_contributors(b)
+    score = zone = None
+    if contributors:
+        weights = {"Training load": 30, "Overnight HRV": 30, "Resting HR": 20, "Sleep": 20}
+        tot = sum(weights[c.name] for c in contributors)
+        score = round(sum(c.score * weights[c.name] for c in contributors) / tot)
+        zone = "High" if score >= 80 else "Moderate" if score >= 60 else "Low" if score >= 40 else "Poor"
+    return Readiness(status, factor, flags, reasons or ["load, HRV and resting HR all look normal"], score, zone, contributors)
+
+
+def _level(score: float) -> str:
+    return "good" if score >= 80 else "fair" if score >= 50 else "poor"
+
+
+def readiness_contributors(b: Baseline) -> list[Contributor]:
+    """Each signal scored 0-100 against its healthy range or your own baseline (Garmin/Oura style)."""
+    out: list[Contributor] = []
+    if b.load_ratio is not None:
+        r = b.load_ratio
+        sc = 100 if 0.8 <= r <= 1.3 else 80 if r < 0.8 else max(0, 100 - (r - 1.3) / 0.4 * 100)
+        out.append(Contributor("Training load", f"ratio {r:.2f}", "0.8–1.3", round(sc), _level(sc)))
+    if b.hrv is not None and b.hrv_lo is not None and b.hrv_hi is not None:
+        half = max(1.0, (b.hrv_hi - b.hrv_lo) / 2)
+        sc = 100 if b.hrv >= b.hrv_lo else max(0, 100 - (b.hrv_lo - b.hrv) / half * 80)
+        out.append(Contributor("Overnight HRV", f"{b.hrv:g} ms", f"{b.hrv_lo:g}–{b.hrv_hi:g} ms", round(sc), _level(sc)))
+    if b.rhr7 is not None and b.rhr28 is not None:
+        diff = b.rhr7 - b.rhr28
+        sc = 100 if diff <= 1 else max(0, 100 - (diff - 1) * 20)
+        out.append(Contributor("Resting HR", f"{b.rhr7:g} bpm (7 d)", f"{b.rhr28:g} bpm (28 d)", round(sc), _level(sc)))
+    if b.sleep_last_min:
+        h = b.sleep_last_min / 60
+        sc = 100 if h >= 7.5 else max(0, 100 - (7.5 - h) * 25)
+        base = f"{b.sleep7_min / 60:.1f} h (7 d)" if b.sleep7_min else "7.5 h"
+        out.append(Contributor("Sleep", f"{h:.1f} h last night", base, round(sc), _level(sc)))
+    return out
+
+
+# ---- fitness / fatigue / form (performance management) ----------------------------------------
+
+FORM_ZONES = [  # (lower bound, label) for TSB, highest first
+    (25, "Transition"),  # fitness fading, very fresh
+    (5, "Fresh"),  # good for racing
+    (-10, "Neutral"),
+    (-30, "Optimal training"),
+    (float("-inf"), "High risk"),
+]
+
+
+def form_zone(tsb: float) -> str:
+    return next(label for lo, label in FORM_ZONES if tsb >= lo)
+
+
+def activity_load(duration_s: int | None, avg_hr: int | None, provider_load: float | None, max_hr: int = 190) -> float:
+    """Provider load if available, else an HR-weighted TRIMP-style estimate."""
+    if provider_load:
+        return float(provider_load)
+    if not duration_s:
+        return 0.0
+    minutes = duration_s / 60
+    intensity = (avg_hr / max_hr) if avg_hr else 0.6
+    return round(minutes * intensity**2 * 1.6, 1)
+
+
+def performance(daily_load: dict[date, float], start: date, end: date) -> list[dict]:
+    """CTL (42-day EWMA, fitness), ATL (7-day EWMA, fatigue), TSB = yesterday's CTL - ATL (form), ramp = CTL change
+    over 7 days. Warm-up starts at the earliest load so the curve is right from `start`."""
+    first = min([start, *daily_load.keys()]) if daily_load else start
+    ctl = atl = 0.0
+    hist: list[float] = []
+    out = []
+    d = first
+    while d <= end:
+        tsb = ctl - atl
+        load = daily_load.get(d, 0.0)
+        ctl += (load - ctl) / 42
+        atl += (load - atl) / 7
+        hist.append(ctl)
+        if d >= start:
+            ramp = ctl - hist[-8] if len(hist) >= 8 else 0.0
+            out.append(
+                {
+                    "date": d,
+                    "load": round(load, 1),
+                    "fitness": round(ctl, 1),
+                    "fatigue": round(atl, 1),
+                    "form": round(tsb, 1),
+                    "ramp": round(ramp, 1),
+                    "zone": form_zone(tsb),
+                }
+            )
+        d += DAY
+    return out
+
+
+# ---- endurance shape (inspired by Runalyze's marathon shape) -----------------------------------
+
+SHAPE_TARGETS = {"5k": (30, 10), "10k": (40, 14), "half": (50, 20), "marathon": (65, 30)}  # weekly km, long run km
+
+
+def endurance_shape(runs: list[Run], today: date, race_km: float) -> dict:
+    """How well recent volume (6 weeks) and long runs (8 weeks) cover the race distance. 100% = enough."""
+    weekly_t, long_t = SHAPE_TARGETS[category(race_km)]
+    recent = [r for r in runs if r.type == "Run" and r.km]
+    weekly = sum(r.km for r in recent if r.day > today - 42 * DAY) / 6
+    longest = max((r.km for r in recent if r.day > today - 56 * DAY), default=0)
+    pct = round(100 * (0.67 * min(1, weekly / weekly_t) + 0.33 * min(1, longest / long_t)))
+    return {
+        "pct": pct,
+        "weekly_km": round(weekly, 1),
+        "weekly_target": weekly_t,
+        "longest_km": round(longest, 1),
+        "long_target": long_t,
+    }
 
 
 # ---- races --------------------------------------------------------------------------------------

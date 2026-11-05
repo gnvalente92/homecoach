@@ -96,3 +96,13 @@ def test_basic_auth(client, monkeypatch):
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/races", auth=("me", "pw")).status_code == 200
     assert client.get("/api/races", auth=("me", "nope")).status_code == 401
+
+
+def test_fitness_and_summary_previous(client):
+    f = client.get("/api/fitness?days=28").json()
+    assert len(f) == 28 and {"fitness", "fatigue", "form", "ramp", "zone"} <= set(f[0])
+    assert f[-1]["fitness"] > 0
+    s = client.get("/api/summary?days=14").json()
+    assert s["previous"] is not None and s["previous"]["runs"] == 7 and s["runs"] == 7
+    p = client.get("/api/plan").json()
+    assert p["readiness"]["score"] is not None and p["readiness"]["contributors"]

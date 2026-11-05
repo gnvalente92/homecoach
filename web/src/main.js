@@ -25,6 +25,13 @@ const card = (title, note, body) => h('div', { class: 'card' }, h('h3', {}, titl
 const tile = (label, value, unit, sub, cls) =>
   h('div', { class: 'card tile' }, h('div', { class: 'label' }, label),
     h('div', { class: `value ${cls || ''}` }, value ?? '—', unit ? h('small', {}, ` ${unit}`) : null), sub ? h('div', { class: 'sub' }, sub) : null);
+const delta = (cur, prev, goodUp = true, unit = '') => {
+  if (cur == null || prev == null || prev === 0) return null;
+  const d = cur - prev, pctv = Math.round((d / Math.abs(prev)) * 100);
+  if (!pctv) return h('span', { class: 'delta' }, '±0% vs previous');
+  const good = goodUp ? d > 0 : d < 0;
+  return h('span', { class: `delta ${good ? 'up' : 'down'}` }, `${d > 0 ? '▲' : '▼'} ${Math.abs(pctv)}% vs previous`);
+};
 const chartBox = (height) => h('div', { class: 'chart', style: `min-height:${height}px` });
 const phaseColor = (ph) => ({ Base: color(5), Build: color(0), Peak: color(3), Taper: color(2), 'Race week': color(1) }[String(ph).replace(' (easier week)', '').split(' ·')[0]] || css('--grey'));
 const typeColor = (t) => ({ Run: color(0), Strength: color(1), Walk: color(2) }[t] || color(4));
@@ -57,31 +64,72 @@ function periodSeg(onChange) {
 
 // ---- pages ------------------------------------------------------------------------------------
 
+const zoneColor = (z) => ({ High: css('--good'), Moderate: css('--c1'), Low: css('--fair'), Poor: css('--poor') }[z] || css('--grey'));
+const levelColor = (l) => ({ good: css('--good'), fair: css('--fair'), poor: css('--poor') }[l] || css('--grey'));
+const formColor = (z) => ({ Transition: css('--fair'), Fresh: css('--good'), Neutral: css('--muted'), 'Optimal training': css('--c1'), 'High risk': css('--poor') }[z] || css('--grey'));
+
+function ring(score, colr, size = 168) {
+  const r = size / 2 - 12, c = 2 * Math.PI * r, frac = Math.max(0, Math.min(1, (score ?? 0) / 100));
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`); svg.setAttribute('width', size); svg.setAttribute('height', size); svg.setAttribute('class', 'ring');
+  const mk = (tag, a) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); svg.append(e); return e; };
+  mk('circle', { cx: size / 2, cy: size / 2, r, fill: 'none', stroke: css('--line'), 'stroke-width': 12 });
+  mk('circle', { cx: size / 2, cy: size / 2, r, fill: 'none', stroke: colr, 'stroke-width': 12, 'stroke-linecap': 'round',
+    'stroke-dasharray': `${c * frac} ${c}`, transform: `rotate(-90 ${size / 2} ${size / 2})` });
+  const t = mk('text', { x: '50%', y: '50%', 'text-anchor': 'middle', dy: '.1em', class: 'ring-num' }); t.textContent = score ?? '—';
+  const u = mk('text', { x: '50%', y: '50%', 'text-anchor': 'middle', dy: '2.2em', class: 'ring-lab' }); u.textContent = 'readiness';
+  return svg;
+}
+
 async function today() {
-  const [p, cfg] = await Promise.all([load('plan', '/plan'), load('config', '/config')]);
+  const [p, cfg, fit] = await Promise.all([load('plan', '/plan'), load('config', '/config'), load('fit84', '/fitness?days=84')]);
   const t = cfg.today;
-  const r = p.readiness, b = p.baseline, tw = p.this_week, race = p.target_race;
+  const r = p.readiness, tw = p.this_week, race = p.target_race, shape = p.shape;
   const upcoming = [...tw.sessions, ...p.next_week].filter((s) => s.day >= t && s.status === 'Planned' && s.session !== 'Strength');
   const todays = [...tw.sessions.filter((s) => s.day === t && s.status !== 'Rest'), ...upcoming.filter((s) => s.day > t).slice(0, 1)];
   const pct = Math.min(100, Math.round((tw.done_km / (tw.target_km || 1)) * 100));
+  const form = fit.at(-1);
+  const days = race ? Math.round((parse(race.day) - parse(t)) / 864e5) : null;
+  const zc = zoneColor(r.zone);
+  const advice = { High: 'You’re well recovered — a good day for the key session.', Moderate: 'Recovered enough to train as planned.',
+    Low: 'Some strain showing — keep today easy or shorten the session.', Poor: 'Your body is asking for rest — easy movement only today.' }[r.zone] || '';
   view.replaceChildren(
     h('h1', {}, `Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 19 ? 'afternoon' : 'evening'}, ${p.athlete_name}`),
-    h('p', { class: 'lede' }, race ? `${race.name} is in ${Math.round((parse(race.day) - parse(t)) / 864e5)} days.` : 'No race in your calendar — add one under Races to get a plan built around it.'),
-    h('div', { class: 'grid tiles' },
-      tile('Readiness', r.status, null, `Volume at ${Math.round(r.factor * 100)}% of plan`, `status-${r.status.split(' ')[0]}`),
-      tile('Load ratio', b.load_ratio?.toFixed(2), null, '0.8–1.3 is the sweet spot'),
-      tile('Last night’s HRV', b.hrv, 'ms', b.hrv_lo ? `Normal ${b.hrv_lo}–${b.hrv_hi} ms` : null),
-      tile('Resting HR (7 days)', b.rhr7, 'bpm', b.rhr28 ? `vs ${b.rhr28} bpm over 28 days` : null)),
-    h('p', { class: 'note' }, `Why: ${r.reasons.join('; ')}.`),
-    h('h2', {}, 'Today and next up'),
-    todays.length ? sessionsGrid(todays, t) : h('p', { class: 'note' }, 'Nothing planned.'),
-    h('h2', {}, 'This week'),
-    h('div', { class: 'card' },
-      h('div', { class: 'row', style: 'justify-content:space-between;margin:0' }, h('b', {}, `${tw.done_km} of ~${tw.target_km} km`), h('span', { class: 'note', style: 'margin:0' }, `${pct}%`)),
-      h('div', { class: 'progress' }, h('div', { style: `width:${pct}%` }))),
+    h('p', { class: 'lede' }, advice),
+    h('div', { class: 'hero' },
+      h('div', { class: 'card hero-score' },
+        ring(r.score, zc),
+        h('div', {},
+          h('div', { class: 'zone', style: `color:${zc}` }, r.zone || r.status),
+          h('div', { class: 'note', style: 'margin:2px 0 12px' }, `Plan volume at ${Math.round(r.factor * 100)}%`),
+          h('div', { class: 'contribs' }, r.contributors.map((c) => h('div', { class: 'contrib' },
+            h('div', { class: 'contrib-top' }, h('span', {}, c.name), h('b', {}, c.value)),
+            h('div', { class: 'bar' }, h('div', { style: `width:${c.score}%;background:${levelColor(c.level)}` })),
+            h('div', { class: 'note', style: 'margin:2px 0 0' }, `Your normal: ${c.baseline}`)))))),
+      h('div', { class: 'hero-side' },
+        h('div', { class: 'card' }, h('div', { class: 'label' }, 'Today and next up'),
+          todays.length ? todays.map((s) => h('div', { class: 'next' },
+            h('div', { class: 'note', style: 'margin:0' }, `${fDay(parse(s.day))}${s.status === 'Done' ? ' · done' : ''}`),
+            h('div', { class: 'next-name' }, s.session, s.km ? h('span', { class: 'muted' }, ` · ${s.km} km`) : null),
+            s.pace ? h('div', { class: 'note', style: 'margin:0' }, s.pace) : null)) : h('div', { class: 'note' }, 'Nothing planned.')),
+        h('div', { class: 'card' }, h('div', { class: 'label' }, 'This week'),
+          h('div', { class: 'big' }, `${tw.done_km}`, h('small', {}, ` / ${tw.target_km} km`)),
+          h('div', { class: 'progress' }, h('div', { style: `width:${pct}%` }))),
+        form ? h('div', { class: 'card' }, h('div', { class: 'label' }, 'Form'),
+          h('div', { class: 'big', style: `color:${form.zone === 'Neutral' ? css('--fg') : formColor(form.zone)}` }, form.form > 0 ? `+${form.form}` : form.form, h('small', {}, ` ${form.zone}`)),
+          h('div', { class: 'note', style: 'margin:0' }, `Fitness ${form.fitness} · fatigue ${form.fatigue} · ramp ${form.ramp > 0 ? '+' : ''}${form.ramp}/wk`)) : null)),
+    race ? h('div', { class: 'card race-card' },
+      h('div', {}, h('div', { class: 'label' }, 'Next race'), h('div', { class: 'big' }, race.name),
+        h('div', { class: 'note', style: 'margin:0' }, `${d3.utcFormat('%a %b %-d')(parse(race.day))} · ${+race.distance_km.toFixed(1)} km${race.goal_time_s ? ` · goal ${race.goal_time_s < 3600 ? `${Math.floor(race.goal_time_s / 60)}:${String(race.goal_time_s % 60).padStart(2, "0")}` : hm(race.goal_time_s)}` : ''}`)),
+      h('div', { class: 'countdown' }, h('b', {}, days), h('span', {}, days === 1 ? 'day' : 'days')),
+      shape ? h('div', { class: 'shape' }, h('div', { class: 'label' }, `Endurance shape for ${+race.distance_km.toFixed(1)} km`),
+        h('div', { class: 'big' }, `${shape.pct}%`),
+        h('div', { class: 'bar' }, h('div', { style: `width:${shape.pct}%;background:${shape.pct >= 90 ? css('--good') : shape.pct >= 70 ? css('--fair') : css('--poor')}` })),
+        h('div', { class: 'note', style: 'margin:2px 0 0' }, `${shape.weekly_km} of ${shape.weekly_target} km/week · longest ${shape.longest_km} of ${shape.long_target} km`)) : null)
+      : h('div', { class: 'card empty' }, 'No race in your calendar — add one under Races to get a plan built around it.'),
   );
 }
-
 
 // calendar heatmap: weeks as columns, Mon..Sun rows
 function calendarChart(el, rows, o) {
@@ -113,14 +161,14 @@ async function overview() {
   view.replaceChildren(
     h('div', { class: 'row', style: 'justify-content:space-between' }, h('h1', {}, 'Overview'), periodSeg(overview)),
     h('p', { class: 'lede' }, `You averaged ${sum.avg_steps ? fInt(Math.round(sum.avg_steps)) : '—'} steps a day, hit 10,000 on ${sum.days_10k} days, ran ${sum.run_km} km in ${sum.runs} runs and slept ${sum.avg_sleep_h ?? '—'} hours a night.`),
-    h('div', { class: 'grid tiles' },
-      tile('Daily steps', sum.avg_steps ? fInt(Math.round(sum.avg_steps)) : null, null, 'Average per day'),
-      tile('Days over 10k', sum.days_10k, null, 'Of the days shown'),
-      tile('Running', sum.run_km, 'km', `${sum.runs} runs`),
-      tile('Workouts', sum.sessions, null, 'Runs, strength and walks'),
-      tile('Training time', sum.train_h, 'h', 'All recorded workouts'),
-      tile('Sleep', sum.avg_sleep_h, 'h', 'Average per night'),
-      tile('Resting HR', sum.avg_rhr, 'bpm', 'Average'),
+    h('div', { class: 'grid four' },
+      tile('Running', sum.run_km, 'km', delta(sum.run_km, (sum.previous || {}).run_km) || `${sum.runs} runs`),
+      tile('Training time', sum.train_h, 'h', delta(sum.train_h, (sum.previous || {}).train_h) || 'All recorded workouts'),
+      tile('Workouts', sum.sessions, null, delta(sum.sessions, (sum.previous || {}).sessions) || 'Runs, strength and walks'),
+      tile('Daily steps', sum.avg_steps ? fInt(Math.round(sum.avg_steps)) : null, null, delta(sum.avg_steps, (sum.previous || {}).avg_steps) || 'Average per day'),
+      tile('Sleep', sum.avg_sleep_h, 'h', delta(sum.avg_sleep_h, (sum.previous || {}).avg_sleep_h) || 'Average per night'),
+      tile('Resting HR', sum.avg_rhr, 'bpm', delta(sum.avg_rhr, (sum.previous || {}).avg_rhr, false) || 'Average'),
+      tile('Overnight HRV', sum.avg_hrv, 'ms', delta(sum.avg_hrv, (sum.previous || {}).avg_hrv) || 'Average'),
       tile('VO2max', sum.vo2max, null, sum.threshold_pace ? `Threshold ${sum.threshold_pace} /km` : 'From your watch')),
     h('h2', {}, 'Week by week'),
     h('div', { class: 'grid four' },
@@ -218,16 +266,21 @@ async function races() {
 
 async function trends() {
   const q = `?days=${state.days}`;
-  const [weekly, daily, acts, sum] = await Promise.all([load('weekly' + q, '/weekly' + q), load('daily' + q, '/daily' + q), load('acts' + q, '/activities' + q), load('sum' + q, '/summary' + q)]);
+  const [weekly, daily, acts, sum, fit] = await Promise.all([load('weekly' + q, '/weekly' + q), load('daily' + q, '/daily' + q), load('acts' + q, '/activities' + q), load('sum' + q, '/summary' + q), load('fit' + q, '/fitness' + q)]);
   const runs = acts.filter((a) => a.type === 'Run' && a.km && a.pace_s).map((a) => ({ ...a, eff: a.avg_hr ? +(a.km * 1000 / (a.duration_s / 60) / a.avg_hr).toFixed(2) : null }));
   const daysRows = daily.map((d, i, arr) => ({ ...d, date: d.day, steps_7d: Math.round(d3.mean(arr.slice(Math.max(0, i - 6), i + 1), (x) => x.steps || 0)) }));
-  const boxes = { km: chartBox(220), types: chartBox(220), steps: chartBox(240), pace: chartBox(260), eff: chartBox(220), load: chartBox(220), ratio: chartBox(170), actcal: chartBox(120), bytype: chartBox(120), stepcal: chartBox(120), weekday: chartBox(200), kcal: chartBox(220) };
+  const boxes = { pmc: chartBox(280), km: chartBox(220), types: chartBox(220), steps: chartBox(240), pace: chartBox(260), eff: chartBox(220), load: chartBox(220), ratio: chartBox(170), actcal: chartBox(120), bytype: chartBox(120), stepcal: chartBox(120), weekday: chartBox(200), kcal: chartBox(220) };
   view.replaceChildren(
     h('div', { class: 'row', style: 'justify-content:space-between' }, h('h1', {}, 'Trends'), periodSeg(trends)),
     h('div', { class: 'grid tiles' },
       tile('Running', sum.run_km, 'km', `${sum.runs} runs`), tile('Training', sum.train_h, 'h', `${sum.sessions} sessions`),
       tile('Daily steps', sum.avg_steps ? fInt(Math.round(sum.avg_steps)) : null, null, `${sum.days_10k} days over 10k`),
       tile('VO2max', sum.vo2max, null, sum.threshold_pace ? `Threshold ${sum.threshold_pace} /km` : null)),
+    h('h2', {}, 'Fitness, fatigue and form'),
+    card('Performance', 'Fitness = 42-day average training load; fatigue = 7-day average; form = fitness − fatigue. Bars show form, coloured by zone.', [
+      h('div', { class: 'legend' }, [['Fitness', css('--c1')], ['Fatigue', css('--c4')]].map(([n, c]) => h('span', {}, h('span', { class: 'sw', style: `background:${c}` }), n)),
+        ['Fresh', 'Neutral', 'Optimal training', 'High risk', 'Transition'].map((z) => h('span', {}, h('span', { class: 'sw', style: `background:${formColor(z)}` }), z))),
+      boxes.pmc]),
     h('h2', {}, 'Training'),
     h('div', { class: 'grid' },
       card('Weekly running distance', 'Kilometres per week', boxes.km),
@@ -259,6 +312,10 @@ async function trends() {
         h('td', {}, h('span', { class: 'sw', style: `background:${typeColor(a.type)}` }), a.type), h('td', { class: 'hide-sm' }, a.name || a.sport),
         h('td', { class: 'num' }, hm(a.duration_s)), h('td', { class: 'num' }, a.km ?? ''), h('td', { class: 'num' }, a.type === 'Run' ? pace(a.pace_s) : ''), h('td', { class: 'num' }, a.avg_hr ?? ''))))))
   );
+  timeChart(boxes.pmc, fit, { h: 280, ymin: Math.min(0, d3.min(fit, (r) => r.form) ?? 0), yfmt: d3.format('d'),
+    bars: [{ key: 'form', name: 'Form', color: (r) => formColor(r.zone), opacity: () => 0.55 }],
+    lines: [{ key: 'fitness', name: 'Fitness', color: css('--c1') }, { key: 'fatigue', name: 'Fatigue', color: css('--c4') }],
+    refs: [{ v: 0 }], extra: (r) => [{ name: 'Zone', value: r.zone }, { name: 'Day load', value: r.load }] });
   timeChart(boxes.km, weekly, { x: 'week', step: 'week', h: 220, yfmt: f1, bars: [{ key: 'run_km', name: 'Run km', color: color(0), fmt: f1 }] });
   timeChart(boxes.types, weekly, { x: 'week', step: 'week', h: 220, stack: true, yfmt: f1, bars: [
     { key: 'run_h', name: 'Run', color: typeColor('Run'), fmt: f1 }, { key: 'strength_h', name: 'Strength', color: typeColor('Strength'), fmt: f1 },
@@ -300,7 +357,7 @@ async function recovery() {
     h('div', { style: 'height:16px' }),
     h('div', { class: 'grid' },
       card('Overnight HRV', 'Shaded band is your normal range.', boxes.hrv),
-      card('Resting heart rate', 'Beats per minute. A rise of several beats often follows hard days, poor sleep or illness.', boxes.hr)),
+      card('Resting heart rate', 'Grey line is your 28-day baseline. Several beats above it often follows hard days, poor sleep or illness.', boxes.hr)),
     h('div', { style: 'height:16px' }),
     h('div', { class: 'grid' },
       card('Sleep score', 'Nights under 70 highlighted.', boxes.score),
@@ -313,7 +370,8 @@ async function recovery() {
     { key: 'rem_min', name: 'REM', color: color(6), fmt: hmin }, { key: 'awake_min', name: 'Awake', color: css('--grey'), fmt: hmin }],
     extra: (r) => [{ name: 'Asleep', value: hmin(r.sleep_min) }, { name: 'Score', value: r.sleep_score ?? '—' }] });
   timeChart(boxes.hrv, rows.filter((r) => r.hrv_avg), { h: 220, ymin: 15, band: { lo: 'hrv_lo', hi: 'hrv_hi' }, lines: [{ key: 'hrv_avg', name: 'HRV (ms)', color: color(4), dots: true }] });
-  timeChart(boxes.hr, rows.filter((r) => r.resting_hr), { h: 220, ymin: 40, lines: [{ key: 'resting_hr', name: 'Resting HR', color: color(0) }] });
+  const rhrRows = rows.filter((r) => r.resting_hr).map((r, i, arr) => ({ ...r, rhr_base: +d3.mean(arr.slice(Math.max(0, i - 27), i + 1), (x) => x.resting_hr).toFixed(1) }));
+  timeChart(boxes.hr, rhrRows, { h: 220, ymin: 40, lines: [{ key: 'resting_hr', name: 'Resting HR', color: color(0) }, { key: 'rhr_base', name: '28-day baseline', color: css('--muted') }] });
   timeChart(boxes.score, rows.filter((r) => r.sleep_score), { h: 200, ymax: 100, bars: [{ key: 'sleep_score', name: 'Score', color: (r) => (r.sleep_score < 70 ? css('--bad') : color(4)) }] });
   timeChart(boxes.bed, rows.filter((r) => r.bed_h), { h: 220, ymin: 21, yfmt: clock, refs: [{ v: 23, label: '23:00' }], lines: [{ key: 'bed_h', name: 'Fell asleep', color: color(4), dots: true, noLine: true, fmt: clock }] });
   timeChart(boxes.stress, rows.filter((r) => r.stress_avg != null), { h: 200, bars: [{ key: 'stress_avg', name: 'Stress', color: (r) => (r.stress_avg >= 40 ? color(3) : css('--grey')) }] });
@@ -335,6 +393,13 @@ async function syncStatus() {
     $('#sync').textContent = st?.last_sync ? `Synced ${d3.timeFormat('%H:%M')(new Date(st.last_sync))}` : 'Waiting for first sync';
   } catch { $('#sync').textContent = ''; }
 }
+try { if (localStorage.getItem('hc.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch {}
+$('#theme').addEventListener('click', () => {
+  const light = document.documentElement.dataset.theme !== 'light';
+  if (light) document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem('hc.theme', light ? 'light' : 'dark'); } catch {}
+  route();
+});
 window.addEventListener('hashchange', route);
 let resizeT; window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(route, 250); });
 setInterval(() => { resetCache(); syncStatus(); if ((location.hash.slice(1) || 'today') !== 'races') route(); }, 10 * 60 * 1000);
