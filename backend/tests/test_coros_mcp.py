@@ -325,3 +325,14 @@ def test_redirect_allowed():
     assert coros_auth.redirect_allowed("https://coach.example/cb")
     assert coros_auth.redirect_allowed("http://localhost/homecoach-coros-callback")
     assert not coros_auth.redirect_allowed("http://192.168.1.20:8742/api/coros/callback")
+
+
+def test_config_never_exposes_coros_tokens(client):
+    from homecoach.collector.sync import set_state
+
+    db = next(api.app.dependency_overrides[api.get_session]())
+    coros_auth.save(db, {"tokens": {"access_token": "secret-token", "refresh_token": "secret-refresh"}})
+    set_state(db, "coros", {"last_sync": "2026-11-05T15:40:00+00:00"})
+    db.commit()
+    body = client.get("/api/config").text
+    assert "secret" not in body and coros_auth.KEY not in body and "2026-11-05T15:40" in body
