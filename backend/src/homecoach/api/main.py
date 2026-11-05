@@ -96,7 +96,7 @@ def runs_from(acts: list[Activity]) -> list[E.Run]:
 
 
 def days_from(rows: list[DailyMetric]) -> list[E.Day]:
-    return [E.Day(r.day, r.resting_hr, r.hrv_avg, r.hrv_lo, r.hrv_hi, r.load_ratio) for r in rows]
+    return [E.Day(r.day, r.resting_hr, r.hrv_avg, r.hrv_lo, r.hrv_hi, r.load_ratio, r.sleep_min) for r in rows]
 
 
 def races_from(rows: list[Race]) -> list[E.RaceIn]:
@@ -214,29 +214,44 @@ def weekly(days: int | None = Query(84, ge=7), db: Session = Db) -> list[dict]:
     return out
 
 
-@app.get("/api/summary")
-def summary(days: int | None = Query(84, ge=7), db: Session = Db) -> dict:
-    acts = _activities(db, days)
+def _period_stats(db: Session, start: date, end: date) -> dict:
+    acts = list(db.scalars(select(Activity).where(Activity.local_date >= start, Activity.local_date <= end)))
     runs = [a for a in acts if a.type == "Run"]
-    rows = list(db.scalars(select(DailyMetric).where(DailyMetric.day >= since(days))))
+    rows = list(db.scalars(select(DailyMetric).where(DailyMetric.day >= start, DailyMetric.day <= end)))
 
     def avg(xs):
         xs = [x for x in xs if x is not None]
         return round(sum(xs) / len(xs), 1) if xs else None
 
-    snap = db.scalar(select(FitnessSnapshot).order_by(FitnessSnapshot.day.desc()))
+    sleep = avg([r.sleep_min for r in rows])
     return {
-        "days": days,
         "run_km": round(sum(a.km or 0 for a in runs), 1),
         "runs": len(runs),
         "sessions": len(acts),
         "train_h": round(sum(a.duration_s or 0 for a in acts) / 3600, 1),
         "avg_steps": avg([r.steps for r in rows]),
         "days_10k": sum(1 for r in rows if (r.steps or 0) >= 10000),
-        "avg_sleep_h": round(avg([r.sleep_min for r in rows]) / 60, 1) if avg([r.sleep_min for r in rows]) else None,
+        "avg_sleep_h": round(sleep / 60, 1) if sleep else None,
         "avg_rhr": avg([r.resting_hr for r in rows]),
+        "avg_hrv": avg([r.hrv_avg for r in rows]),
+    }
+
+
+@app.get("/api/summary")
+def summary(days: int | None = Query(84, ge=7), db: Session = Db) -> dict:
+    """Totals for the period, plus the same totals for the period before it (for change indicators)."""
+    end = today()
+    n = min(days or 36500, 3650)
+    cur = _period_stats(db, end - timedelta(days=n - 1), end)
+    prev = _period_stats(db, end - timedelta(days=2 * n - 1), end - timedelta(days=n))
+    snap = db.scalar(select(FitnessSnapshot).order_by(FitnessSnapshot.day.desc()))
+    th = threshold_s(db)
+    return {
+        "days": days,
+        **cur,
+        "previous": prev if any(prev[k] for k in ("run_km", "sessions", "avg_steps")) else None,
         "vo2max": snap.vo2max if snap else None,
-        "threshold_pace": E.fmt_pace(threshold_s(db)) if threshold_s(db) else None,
+        "threshold_pace": E.fmt_pace(th) if th else None,
     }
 
 
@@ -339,8 +354,21 @@ def plan(db: Session = Db) -> dict:
             "next_week": E.next_week(b, weeks, r),
             "race_plan": weeks,
             "road": E.road(runs, weeks, b),
+            "shape": {**E.endurance_shape(runs, t, tr.distance_km), "race": tr.name} if tr else None,
         }
     )
+
+
+@app.get("/api/fitness")
+def fitness(days: int | None = Query(84, ge=7), db: Session = Db) -> list[dict]:
+    """Fitness (CTL), fatigue (ATL), form (TSB) and ramp rate from daily training load."""
+    end = today()
+    start = since(min(days or 3650, 3650))
+    acts = db.scalars(select(Activity).where(Activity.local_date >= start - timedelta(days=120)))
+    load: dict[date, float] = defaultdict(float)
+    for a in acts:
+        load[a.local_date] += E.activity_load(a.duration_s, a.avg_hr, a.training_load)
+    return jsonable(E.performance(dict(load), start, end))
 
 
 # ---- web UI -------------------------------------------------------------------------------------

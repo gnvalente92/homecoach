@@ -88,8 +88,11 @@ export function timeChart(el, rows, o) {
     for (const b of bars) {
       const val = v(r, b.key);
       if (!val) continue;
-      const y0 = o.stack ? acc : 0; acc += val;
-      svg.append('rect').attr('x', x(r._d) - bw / 2).attr('width', bw).attr('y', y(y0 + val)).attr('height', Math.max(0, y(y0) - y(y0 + val)))
+      const base = o.stack ? acc : Math.max(0, y.domain()[0]);
+      const top = o.stack ? acc + val : val;
+      acc += val;
+      const [yTop, yBot] = top >= base ? [y(top), y(base)] : [y(base), y(top)];
+      svg.append('rect').attr('x', x(r._d) - bw / 2).attr('width', bw).attr('y', yTop).attr('height', Math.max(0, yBot - yTop))
         .attr('rx', Math.min(2, bw / 2)).attr('fill', colorOf(b, r)).attr('fill-opacity', b.opacity ? b.opacity(r) : 1);
     }
   }
