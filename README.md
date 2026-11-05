@@ -33,7 +33,7 @@ Pages load instantly because they read from the local database. A collector keep
 
 ## Screenshots
 
-<sub>Synthetic demo data.</sub>
+<sub>Synthetic demo data: “Alex”, building towards a half marathon, with a tune-up 10K and a parkrun on the way. Regenerate it with `backend/scripts/seed_demo.py`.</sub>
 
 | Training plan and coach | Races and race assistant |
 |---|---|
@@ -48,9 +48,9 @@ Pages load instantly because they read from the local database. A collector keep
 |---|---|
 | ![Sleep stages, HRV and resting HR against baselines](docs/screenshots/recovery.png) | ![This week's sessions and the coach panel](docs/screenshots/plan.png) |
 
-| Am I on track? | |
-|---|---|
-| ![Race outlook: goal pace vs prediction and recent runs, with the coach's reading](docs/screenshots/race-outlook.png) | |
+**Am I on track?**
+
+![Race outlook: goal pace vs prediction and recent runs, with the coach's reading](docs/screenshots/race-outlook.png)
 
 | Light theme | Mobile |
 |---|---|
