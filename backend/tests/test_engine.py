@@ -163,3 +163,39 @@ def test_endurance_shape():
     s = E.endurance_shape(runs, TODAY, 10)
     assert s["weekly_target"] == 40 and s["pct"] < 100 and s["longest_km"] == 10
     assert E.endurance_shape(runs, TODAY, 42.2)["pct"] < s["pct"]
+
+
+def test_apply_adjustments():
+    mon = date(2026, 11, 9)
+    week = [
+        E.Session(mon + timedelta(days=1), "Easy run", 8, "", ""),
+        E.Session(mon + timedelta(days=3), "Key session", 10, "", ""),
+        E.Session(mon + timedelta(days=6), "Long run", 16, "", ""),
+    ]
+    out = E.apply_adjustments(
+        week,
+        [
+            E.Adjustment(mon + timedelta(days=3), "move", move_to=mon + timedelta(days=4), reason="travel"),
+            E.Adjustment(mon + timedelta(days=6), "shorten", km=12, reason="sore calf"),
+            E.Adjustment(mon + timedelta(days=1), "skip", reason="rest"),
+        ],
+    )
+    by = {x.day.weekday(): x for x in out}
+    assert by[4].session == "Key session" and by[4].adjusted and by[3].status == "Rest"
+    assert by[6].km == 12 and by[6].reason == "sore calf" and by[1].status == "Rest"
+    assert week[2].km == 16  # input untouched
+
+
+def test_check_adjustment_guardrails():
+    mon = date(2026, 11, 9)
+    week = [E.Session(mon + timedelta(days=1), "Easy run", 8), E.Session(mon + timedelta(days=6), "Long run", 14)]
+    ok = E.Adjustment(mon + timedelta(days=6), "shorten", km=10, reason="x")
+    assert E.check_adjustment(ok, week, 22, 14, mon) is None
+    too_long = E.Adjustment(mon + timedelta(days=6), "replace", session="Long run", km=25, reason="x")
+    assert "longest recent run" in E.check_adjustment(too_long, week, 22, 14, mon)
+    too_much = E.Adjustment(mon + timedelta(days=3), "replace", session="Easy run", km=12, reason="x")
+    assert "safe limit" in E.check_adjustment(too_much, week, 22, 14, mon)
+    past = E.Adjustment(mon - timedelta(days=1), "skip", reason="x")
+    assert "past" in E.check_adjustment(past, week, 22, 14, mon)
+    cross = E.Adjustment(mon + timedelta(days=6), "move", move_to=mon + timedelta(days=8), reason="x")
+    assert "same week" in E.check_adjustment(cross, week, 22, 14, mon)

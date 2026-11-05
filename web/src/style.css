@@ -117,3 +117,10 @@ button.link { border: 0; background: none; color: var(--accent); cursor: pointer
 .sources { font-size: 12px; color: var(--muted); }
 .chat-form { display: flex; gap: 8px; } .chat-form input { flex: 1; }
 button:disabled { opacity: .6; cursor: default; }
+
+.pill.adj { background: var(--c5); color: #fff; }
+.adj-reason { color: var(--c5); }
+.coach-note { background: var(--panel-2); border-radius: 10px; padding: 10px 14px; white-space: pre-wrap; font-size: 14px; }
+.proposal.accepted { border-left-color: var(--good); opacity: .75; } .proposal.dismissed { border-left-color: var(--grey); opacity: .55; }
+.proposal { margin-top: 8px; }
+details summary { cursor: pointer; }
