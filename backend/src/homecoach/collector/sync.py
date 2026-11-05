@@ -88,7 +88,13 @@ def sync_provider(s: Session, provider: Provider, settings: Settings, *, full: b
     first_run = "last_sync" not in state
     lookback = settings.backfill_days if (full or first_run) else 3
     start = today - timedelta(days=lookback)
-    stats = {"activities_new": 0, "activities_seen": 0, "days": 0, "fit_downloaded": 0}
+    stats = {
+        "mode": "full" if (full or first_run) else "incremental",
+        "activities_new": 0,
+        "activities_seen": 0,
+        "days": 0,
+        "fit_downloaded": 0,
+    }
 
     acts = provider.fetch_activities(start, today)
     for a in acts:

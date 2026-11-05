@@ -205,6 +205,7 @@ def weekly(days: int | None = Query(84, ge=7), db: Session = Db) -> list[dict]:
             {
                 "week": wk,
                 **w,
+                "train_h": round(w["run_h"] + w["strength_h"] + w["walk_h"] + w["other_h"], 1),
                 "avg_steps": round(sum(steps) / len(steps)) if steps else None,
                 "avg_sleep_h": round(sum(sleep) / len(sleep) / 60, 1) if sleep else None,
                 "avg_rhr": round(sum(rhr) / len(rhr), 1) if rhr else None,

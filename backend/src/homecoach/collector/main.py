@@ -26,19 +26,31 @@ def run_once(full: bool = False) -> None:
         return
     with session_scope() as s:
         stats = sync_provider(s, provider, settings, full=full)
-    log.info("sync %s done: %s", "full" if full else "incremental", stats)
+    log.info("sync %s done: %s", stats.pop("mode", "incremental"), stats)
+
+
+def _heartbeat() -> None:
+    try:
+        p = get_settings().data_dir / ".collector-heartbeat"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+    except OSError as e:
+        log.warning("could not write heartbeat: %s", e)
 
 
 def _safe(full: bool) -> None:
+    _heartbeat()  # alive, even if the provider is failing
     try:
         run_once(full)
     except Exception:
         log.exception("sync failed; will retry on the next run")
+    _heartbeat()
 
 
 def main() -> None:
     settings = get_settings()
     sched = BlockingScheduler(timezone=settings.timezone)
+    sched.add_job(_heartbeat, "interval", minutes=5, id="heartbeat")
     sched.add_job(
         _safe, "interval", minutes=settings.sync_interval_minutes, args=[False], id="incremental", max_instances=1, coalesce=True
     )

@@ -82,6 +82,57 @@ async function today() {
   );
 }
 
+
+// calendar heatmap: weeks as columns, Mon..Sun rows
+function calendarChart(el, rows, o) {
+  el.replaceChildren();
+  if (!rows.length) { el.innerHTML = '<div class="empty">No data for this period yet</div>'; return; }
+  const ds = rows.map((r) => parse(r.date));
+  const mon = (d) => d3.utcMonday.floor(d);
+  const weeks = d3.utcMonday.range(mon(d3.min(ds)), new Date(+mon(d3.max(ds)) + 864e5));
+  const w = Math.max(280, el.clientWidth || 600);
+  const cell = Math.max(8, Math.min(24, Math.floor((w - 40) / weeks.length) - 3));
+  const H = 7 * (cell + 3) + 24, W = 32 + weeks.length * (cell + 3);
+  const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${Math.max(w, W)} ${H}`);
+  const tip = d3.select(el).append('div').attr('class', 'tip');
+  ['Mon', '', 'Wed', '', 'Fri', '', 'Sun'].forEach((n, i) => n && svg.append('text').attr('x', 26).attr('y', 20 + i * (cell + 3) + cell / 2).attr('dy', '.32em').attr('text-anchor', 'end').text(n));
+  weeks.forEach((wk, i) => { if (wk.getUTCDate() <= 7) svg.append('text').attr('x', 32 + i * (cell + 3)).attr('y', 11).text(d3.utcFormat('%b')(wk)); });
+  svg.append('g').selectAll('rect').data(rows).join('rect')
+    .attr('x', (r) => 32 + Math.round((mon(parse(r.date)) - weeks[0]) / 6048e5) * (cell + 3))
+    .attr('y', (r) => 20 + ((parse(r.date).getUTCDay() + 6) % 7) * (cell + 3))
+    .attr('width', cell).attr('height', cell).attr('rx', 2).attr('fill', (r) => o.fill(r)).attr('fill-opacity', (r) => o.opacity(r))
+    .on('pointermove', (e, r) => { tip.style('opacity', 1).html(''); tip.append('div').attr('class', 't').text(fDay(parse(r.date))); tip.append('div').text(o.label(r));
+      const [px, py] = d3.pointer(e, el); tip.style('left', `${Math.min(px + 12, el.clientWidth - 160)}px`).style('top', `${py - 44}px`); })
+    .on('pointerleave', () => tip.style('opacity', 0));
+}
+
+async function overview() {
+  const q = `?days=${state.days}`;
+  const [weekly, sum] = await Promise.all([load('weekly' + q, '/weekly' + q), load('sum' + q, '/summary' + q)]);
+  const boxes = { steps: chartBox(160), run: chartBox(160), train: chartBox(160), sleep: chartBox(160) };
+  view.replaceChildren(
+    h('div', { class: 'row', style: 'justify-content:space-between' }, h('h1', {}, 'Overview'), periodSeg(overview)),
+    h('p', { class: 'lede' }, `You averaged ${sum.avg_steps ? fInt(Math.round(sum.avg_steps)) : '—'} steps a day, hit 10,000 on ${sum.days_10k} days, ran ${sum.run_km} km in ${sum.runs} runs and slept ${sum.avg_sleep_h ?? '—'} hours a night.`),
+    h('div', { class: 'grid tiles' },
+      tile('Daily steps', sum.avg_steps ? fInt(Math.round(sum.avg_steps)) : null, null, 'Average per day'),
+      tile('Days over 10k', sum.days_10k, null, 'Of the days shown'),
+      tile('Running', sum.run_km, 'km', `${sum.runs} runs`),
+      tile('Workouts', sum.sessions, null, 'Runs, strength and walks'),
+      tile('Training time', sum.train_h, 'h', 'All recorded workouts'),
+      tile('Sleep', sum.avg_sleep_h, 'h', 'Average per night'),
+      tile('Resting HR', sum.avg_rhr, 'bpm', 'Average'),
+      tile('VO2max', sum.vo2max, null, sum.threshold_pace ? `Threshold ${sum.threshold_pace} /km` : 'From your watch')),
+    h('h2', {}, 'Week by week'),
+    h('div', { class: 'grid four' },
+      card('Average daily steps', 'Per week', boxes.steps), card('Running distance', 'Kilometres per week', boxes.run),
+      card('Training time', 'Hours per week', boxes.train), card('Average sleep', 'Hours per night, by week', boxes.sleep)),
+  );
+  timeChart(boxes.steps, weekly.filter((w) => w.avg_steps != null), { x: 'week', step: 'week', h: 160, bars: [{ key: 'avg_steps', name: 'Avg steps', color: color(0) }] });
+  timeChart(boxes.run, weekly, { x: 'week', step: 'week', h: 160, yfmt: f1, bars: [{ key: 'run_km', name: 'Run km', color: color(0), fmt: f1 }] });
+  timeChart(boxes.train, weekly, { x: 'week', step: 'week', h: 160, yfmt: f1, bars: [{ key: 'train_h', name: 'Training h', color: color(1), fmt: f1 }] });
+  timeChart(boxes.sleep, weekly.filter((w) => w.avg_sleep_h != null), { x: 'week', step: 'week', h: 160, yfmt: f1, bars: [{ key: 'avg_sleep_h', name: 'Avg sleep h', color: color(4), fmt: f1 }] });
+}
+
 async function plan() {
   const [p, cfg] = await Promise.all([load('plan', '/plan'), load('config', '/config')]);
   const race = p.target_race;
@@ -170,7 +221,7 @@ async function trends() {
   const [weekly, daily, acts, sum] = await Promise.all([load('weekly' + q, '/weekly' + q), load('daily' + q, '/daily' + q), load('acts' + q, '/activities' + q), load('sum' + q, '/summary' + q)]);
   const runs = acts.filter((a) => a.type === 'Run' && a.km && a.pace_s).map((a) => ({ ...a, eff: a.avg_hr ? +(a.km * 1000 / (a.duration_s / 60) / a.avg_hr).toFixed(2) : null }));
   const daysRows = daily.map((d, i, arr) => ({ ...d, date: d.day, steps_7d: Math.round(d3.mean(arr.slice(Math.max(0, i - 6), i + 1), (x) => x.steps || 0)) }));
-  const boxes = { km: chartBox(220), types: chartBox(220), steps: chartBox(240), pace: chartBox(260), eff: chartBox(220), load: chartBox(220) };
+  const boxes = { km: chartBox(220), types: chartBox(220), steps: chartBox(240), pace: chartBox(260), eff: chartBox(220), load: chartBox(220), ratio: chartBox(170), actcal: chartBox(120), bytype: chartBox(120), stepcal: chartBox(120), weekday: chartBox(200), kcal: chartBox(220) };
   view.replaceChildren(
     h('div', { class: 'row', style: 'justify-content:space-between' }, h('h1', {}, 'Trends'), periodSeg(trends)),
     h('div', { class: 'grid tiles' },
@@ -186,9 +237,21 @@ async function trends() {
       card('Pace vs heart rate', 'Each dot is a run; bigger = longer, darker = more recent. Faster sits higher.', boxes.pace),
       card('Running efficiency', 'Metres per heartbeat — higher means more speed for the same effort.', boxes.eff)),
     h('div', { style: 'height:16px' }),
-    card('Training load', 'Short-term (7-day) vs long-term (28-day) load from your watch.', boxes.load),
+    h('div', { class: 'grid' },
+      card('Training load', 'Short-term (7-day) vs long-term (28-day) load from your watch.', boxes.load),
+      card('Load ratio', 'Short over long-term load. Under 0.8 detraining, over 1.5 excessive.', boxes.ratio)),
+    h('div', { style: 'height:16px' }),
+    h('div', { class: 'grid' },
+      card('Activity calendar', 'Coloured by the day’s main activity; darker = longer.', boxes.actcal),
+      card('Time by activity type', 'Total hours in the period.', boxes.bytype)),
     h('h2', {}, 'Movement'),
     card('Daily steps', 'Bars coloured on days at 10,000+; the line is the 7-day average.', boxes.steps),
+    h('div', { style: 'height:16px' }),
+    h('div', { class: 'grid' },
+      card('Step calendar', 'Darker = more steps.', boxes.stepcal),
+      card('Steps by day of the week', 'Average steps per weekday.', boxes.weekday)),
+    h('div', { style: 'height:16px' }),
+    card('Active calories', 'Calories burned through activity each day.', boxes.kcal),
     h('h2', {}, 'Activities'),
     h('div', { class: 'card tablebox' }, h('table', {},
       h('thead', {}, h('tr', {}, ['Date', 'Type', 'Name', 'Time', 'km', 'Pace', 'Avg HR'].map((x, i) => h('th', { class: i >= 3 ? 'num' : i === 2 ? 'hide-sm' : '' }, x)))),
@@ -206,6 +269,20 @@ async function trends() {
     extra: (r) => [{ name: 'Distance', value: `${r.km} km` }, { name: 'Pace', value: `${pace(r.pace_s)} /km` }] });
   timeChart(boxes.load, daysRows.filter((d) => d.load_short != null), { h: 220, lines: [{ key: 'load_short', name: 'Short-term', color: color(0) }, { key: 'load_long', name: 'Long-term', color: color(1) }],
     extra: (r) => [{ name: 'Ratio', value: r.load_ratio?.toFixed(2) ?? '—' }] });
+  timeChart(boxes.ratio, daysRows.filter((d) => d.load_ratio != null), { h: 170, ymin: 0.4, yfmt: d3.format('.1f'), refs: [{ v: 0.8, label: '0.8' }, { v: 1.5, label: '1.5' }],
+    bars: [{ key: 'load_ratio', name: 'Ratio', fmt: d3.format('.2f'), color: (r) => (r.load_ratio > 1.5 ? css('--bad') : r.load_ratio < 0.8 ? css('--grey') : color(0)) }] });
+  const byDay = d3.rollups(acts, (v) => ({ minutes: d3.sum(v, (a) => a.duration_s || 0) / 60, main: d3.greatest(d3.rollups(v, (x) => d3.sum(x, (a) => a.duration_s || 0), (a) => a.type), (x) => x[1])[0], types: [...new Set(v.map((a) => a.type))].join(' + ') }), (a) => a.date).map(([date, x]) => ({ date, ...x }));
+  calendarChart(boxes.actcal, byDay, { fill: (r) => typeColor(r.main), opacity: (r) => 0.35 + 0.65 * Math.min(1, r.minutes / 90), label: (r) => `${r.types} · ${Math.round(r.minutes)} min` });
+  const types = d3.rollups(acts, (v) => d3.sum(v, (a) => a.duration_s || 0) / 3600, (a) => a.type).sort((a, b) => b[1] - a[1]);
+  boxes.bytype.replaceChildren(...types.map(([t, hrs]) => h('div', { style: 'display:flex;align-items:center;gap:8px;margin:6px 0' }, h('span', { style: 'width:72px;font-size:13px' }, t),
+    h('div', { style: `height:14px;border-radius:3px;background:${typeColor(t)};width:${Math.max(2, (hrs / (types[0]?.[1] || 1)) * 70)}%` }), h('span', { class: 'note', style: 'margin:0' }, `${f1(hrs)} h`))));
+  const stepDays = daysRows.filter((d) => d.steps != null);
+  const maxSteps = d3.max(stepDays, (d) => d.steps) || 1;
+  calendarChart(boxes.stepcal, stepDays, { fill: () => color(0), opacity: (r) => 0.12 + 0.88 * Math.min(1, r.steps / maxSteps), label: (r) => `${fInt(r.steps)} steps` });
+  const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, i) => ({ day, avg: Math.round(d3.mean(stepDays.filter((d) => (parse(d.date).getUTCDay() + 6) % 7 === i), (d) => d.steps) || 0) }));
+  boxes.weekday.replaceChildren(...(stepDays.length ? wd.map((x) => h('div', { style: 'display:flex;align-items:center;gap:8px;margin:5px 0' }, h('span', { style: 'width:36px;font-size:13px' }, x.day),
+    h('div', { style: `height:14px;border-radius:3px;background:${x.day[0] === 'S' ? color(1) : color(0)};width:${(x.avg / (d3.max(wd, (y) => y.avg) || 1)) * 70}%` }), h('span', { class: 'note', style: 'margin:0' }, fInt(x.avg)))) : [h('div', { class: 'empty' }, 'No step data yet')]));
+  timeChart(boxes.kcal, daysRows.filter((d) => d.active_kcal != null), { h: 220, bars: [{ key: 'active_kcal', name: 'Active kcal', color: color(2) }], extra: (r) => [{ name: 'Exercise', value: `${r.exercise_min ?? 0} min` }] });
   timeChart(boxes.steps, daysRows, { h: 240, bars: [{ key: 'steps', name: 'Steps', color: (r) => (r.steps >= 10000 ? color(0) : css('--grey')) }],
     lines: [{ key: 'steps_7d', name: '7-day average', color: color(1) }], refs: [{ v: 10000, label: '10k' }] });
 }
@@ -244,7 +321,7 @@ async function recovery() {
 
 // ---- router -----------------------------------------------------------------------------------
 
-const pages = { today, plan, races, trends, recovery };
+const pages = { today, overview, plan, races, trends, recovery };
 async function route() {
   const name = location.hash.slice(1) || 'today';
   document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === `#${name}`));

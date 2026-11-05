@@ -50,6 +50,10 @@ services:
     restart: unless-stopped
     command: ["collector"]
     environment: *env
+    healthcheck:  # the collector serves no HTTP: healthy while its heartbeat file is fresh
+      test: ["CMD", "python", "-c", "import os,time,sys;sys.exit(0 if time.time()-os.path.getmtime('/data/.collector-heartbeat')<1800 else 1)"]
+      interval: 60s
+      start_period: 15m
     volumes:
       - ${HC_DATA_PATH:-./data/app}:/data
     depends_on:
