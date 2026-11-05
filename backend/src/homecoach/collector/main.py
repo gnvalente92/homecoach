@@ -15,7 +15,19 @@ from homecoach.providers import get_provider
 log = logging.getLogger("homecoach.collector")
 
 
-BACKFILL_KEY = "coros-mcp-backfill"
+# Bumped when a fix needs one more full read: v2 = report text decoding (sleep score, bedtime, HRV, load, activities)
+BACKFILL_KEY = "coros-mcp-backfill-v2"
+
+
+def reset_web_api_units(s) -> None:
+    """The web-API provider stored training load in other units (hundreds to thousands) than the official
+    COROS connection (tens), and COROS only returns the last 31 days of load. Mixed, the chart jumps and the
+    numbers mean nothing, so the old values are cleared once; the official connection fills them from here on."""
+    from sqlalchemy import update
+
+    from homecoach.models import DailyMetric
+
+    s.execute(update(DailyMetric).values(load_short=None, load_long=None))
 
 
 def run_once(full: bool = False) -> dict | None:
@@ -42,6 +54,8 @@ def run_once(full: bool = False) -> dict | None:
             # the first sync through the official connection re-reads everything, even if the old web-API
             # provider already synced (it shares the provider name, so its "last sync" would make this incremental)
             first = not get_state(s, BACKFILL_KEY)
+            if first:
+                reset_web_api_units(s)  # same transaction: rolled back if the sync below fails
             try:
                 stats = sync_provider(s, provider, settings, full=full or first)
                 if full or first:
