@@ -260,12 +260,26 @@ class Session:
         if not self.tools:
             self.list_tools()
         res = self._rpc("tools/call", {"name": name, "arguments": args or {}})
-        text = "\n".join(c.get("text", "") for c in res.get("content", []) if c.get("type") == "text")
+        text = "\n".join(_unquote(c.get("text", "")) for c in res.get("content", []) if c.get("type") == "text")
         if res.get("isError"):
             raise MCPError(f"{name}: {text[:300]}")
         if not text and res.get("structuredContent") is not None:
             text = json.dumps(res["structuredContent"])
         return text
+
+
+def _unquote(text: str) -> str:
+    """Some servers (COROS) put a JSON-encoded string in the text block: '"Report\\nline 2"'. Decode it so the
+    report has real line breaks."""
+    s = text.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        try:
+            v = json.loads(s)
+        except json.JSONDecodeError:
+            return text
+        if isinstance(v, str):
+            text = v
+    return text.replace("\r\n", "\n")
 
 
 def _parse_response(r: httpx.Response, want_id: int) -> dict:

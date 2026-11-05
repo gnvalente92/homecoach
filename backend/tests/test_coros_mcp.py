@@ -238,7 +238,8 @@ def mock_coros(state):
         text = TOOL_TEXT[name]
         if "startDate" in args and not (args["startDate"] <= "20261103" and args["endDate"] >= "20261101"):
             text = "No records in this period."  # date-range tools only return what's inside the window
-        payload = {"jsonrpc": "2.0", "id": msg["id"], "result": {"content": [{"type": "text", "text": text}]}}
+        # like the real COROS server: the text block holds a JSON-encoded string ("...\\n...")
+        payload = {"jsonrpc": "2.0", "id": msg["id"], "result": {"content": [{"type": "text", "text": json.dumps(text)}]}}
         sse = f"event: message\ndata: {json.dumps(payload)}\n\n"  # answer as an event stream
         return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
 
@@ -408,3 +409,11 @@ def test_resync_endpoint(client, monkeypatch):
             break
         threading.Event().wait(0.05)
     assert st["running"] is False and st["stats"]["days"] == 700 and st["error"] is None and st["finished_at"]
+
+
+def test_unquote_json_encoded_text():
+    from homecoach.mcp_client import _unquote
+
+    assert _unquote('"Sleep Overview\\n\\n2026-11-05\\nSleep Score: 91"') == "Sleep Overview\n\n2026-11-05\nSleep Score: 91"
+    assert _unquote("plain\r\ntext") == "plain\ntext"
+    assert _unquote('"not json') == '"not json'
