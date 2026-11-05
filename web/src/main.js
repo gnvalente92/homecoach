@@ -393,7 +393,7 @@ async function races() {
     h('p', { class: 'lede' }, 'Your training plan is built around these. A = main race (full build and taper), B = tune-up (mini-taper, easy days after), C = training race (replaces that week’s hard session).'),
     ol.races.length ? [h('h2', { style: 'margin-top:0' }, 'Am I on track?'),
       h('p', { class: 'note' }, 'Your goal pace against what your watch predicts and what your recent runs show. Verdicts: on track, within reach (≤2% off), stretch (≤5%), ambitious.'),
-      h('div', { class: 'grid' }, ol.races.map((o) => outlookCard(o, ol.llm, () => { resetCache(); races(); }))),
+      h('div', { class: 'stack' }, ol.races.map((o) => outlookCard(o, ol.llm, () => { resetCache(); races(); }))),
       h('div', { style: 'height:24px' })] : null,
     assistantCard(list, status),
     h('div', { style: 'height:16px' }),
