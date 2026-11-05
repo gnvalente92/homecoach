@@ -17,15 +17,30 @@ log = logging.getLogger("homecoach.collector")
 
 def run_once(full: bool = False) -> None:
     settings = get_settings()
-    provider = get_provider(settings)
     with session_scope() as s:
         n = import_fit_inbox(s, settings)
         if n:
             log.info("imported %d FIT files from inbox", n)
-    if provider is None:
+    if settings.provider == "none":
         return
     with session_scope() as s:
-        stats = sync_provider(s, provider, settings, full=full)
+        if settings.provider == "coros-mcp":
+            from homecoach import coros_auth
+            from homecoach.mcp_client import AuthRequired
+
+            try:
+                provider = get_provider(settings, s)
+            except AuthRequired as e:
+                log.warning("%s", e)
+                return
+            try:
+                stats = sync_provider(s, provider, settings, full=full)
+            finally:  # keep refreshed tokens even if the sync failed half way
+                st = provider.s.state
+                if st.pop("changed", False):
+                    coros_auth.save(s, st)
+        else:
+            stats = sync_provider(s, get_provider(settings), settings, full=full)
     log.info("sync %s done: %s", stats.pop("mode", "incremental"), stats)
 
 
@@ -47,6 +62,28 @@ def _safe(full: bool) -> None:
     _heartbeat()
 
 
+def _outlook_target_race() -> None:
+    """Refresh the AI race outlook for the target race (the one the plan is built around)."""
+    from sqlalchemy import select
+
+    from homecoach import outlook
+    from homecoach.api.main import today
+    from homecoach.db import session_scope
+    from homecoach.models import Race
+    from homecoach.plan import engine as E
+
+    try:
+        with session_scope() as db:
+            rows = list(db.scalars(select(Race).where(Race.day >= today())))
+            tr = E.target_race([E.RaceIn(r.name, r.day, r.distance_km, r.goal_time_s, r.priority, r.id) for r in rows], today())
+            race = next((r for r in rows if tr and r.id == tr.id), None)
+            if race and race.goal_time_s:
+                outlook.interpret(get_settings(), db, race, today(), force=True)
+                log.info("race outlook refreshed for %s", race.name)
+    except Exception:
+        log.exception("race outlook failed")
+
+
 def _weekly_review() -> None:
     from homecoach import llm
 
@@ -58,6 +95,7 @@ def _weekly_review() -> None:
 
         out = run_review()
         log.info("weekly coach review done: %d suggestion(s)", len(out["suggestions"]))
+        _outlook_target_race()
     except Exception:
         log.exception("weekly coach review failed")
 

@@ -15,8 +15,11 @@ class Settings(BaseSettings):
     athlete_name: str = "Athlete"
     timezone: str = "Europe/Lisbon"
 
-    # Which provider the collector pulls from: "coros" or "none" (FIT import only)
-    provider: Literal["coros", "none"] = "coros"
+    #   coros-mcp = official COROS MCP server (recommended; connect once in the UI, no password stored)
+    #   coros     = unofficial Training Hub web API (needs HC_COROS_EMAIL / HC_COROS_PASSWORD)
+    #   none      = FIT inbox only
+    provider: Literal["coros-mcp", "coros", "none"] = "coros"
+    coros_mcp_url: str = "https://mcp.coros.com/mcp"
     coros_email: str | None = None
     coros_password: SecretStr | None = None
     coros_region: Literal["eu", "en", "cn"] = "eu"

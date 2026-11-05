@@ -6,7 +6,8 @@ x-env: &env
   HC_DATABASE_URL: postgresql+psycopg://homecoach:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/homecoach
   HC_ATHLETE_NAME: ${HC_ATHLETE_NAME:-Athlete}
   HC_TIMEZONE: ${HC_TIMEZONE:-Europe/Lisbon}
-  HC_PROVIDER: ${HC_PROVIDER:-coros}
+  HC_PROVIDER: ${HC_PROVIDER:-coros-mcp}
+  HC_COROS_MCP_URL: ${HC_COROS_MCP_URL:-https://mcp.coros.com/mcp}
   HC_COROS_EMAIL: ${HC_COROS_EMAIL:-}
   HC_COROS_PASSWORD: ${HC_COROS_PASSWORD:-}
   HC_COROS_REGION: ${HC_COROS_REGION:-eu}

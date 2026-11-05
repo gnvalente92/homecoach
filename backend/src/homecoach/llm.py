@@ -114,7 +114,11 @@ def _openai(s, http, system, messages, tools, by_name, max_rounds) -> Result:
     for _ in range(max_rounds):
         try:
             data = _check(
-                http.post(url, json={"model": s.llm_model, "messages": convo, "tools": spec, "temperature": 0.2}, headers=headers)
+                http.post(
+                    url,
+                    json={"model": s.llm_model, "messages": convo, "temperature": 0.2, **({"tools": spec} if spec else {})},
+                    headers=headers,
+                )
             )
         except httpx.HTTPError as e:
             raise LLMError(f"Couldn't reach the LLM at {s.llm_base_url}: {e}") from e
@@ -151,7 +155,13 @@ def _anthropic(s, http, system, messages, tools, by_name, max_rounds) -> Result:
                 http.post(
                     ANTHROPIC_URL,
                     headers=headers,
-                    json={"model": s.llm_model, "max_tokens": 2000, "system": system, "tools": spec, "messages": convo},
+                    json={
+                        "model": s.llm_model,
+                        "max_tokens": 2000,
+                        "system": system,
+                        "messages": convo,
+                        **({"tools": spec} if spec else {}),
+                    },
                 )
             )
         except httpx.HTTPError as e:

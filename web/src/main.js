@@ -86,7 +86,7 @@ function ring(score, colr, size = 168) {
 }
 
 async function today() {
-  const [p, cfg, fit] = await Promise.all([load('plan', '/plan'), load('config', '/config'), load('fit84', '/fitness?days=84')]);
+  const [p, cfg, fit, ol] = await Promise.all([load('plan', '/plan'), load('config', '/config'), load('fit84', '/fitness?days=84'), load('outlook', '/races/outlook').catch(() => ({ races: [] }))]);
   const t = cfg.today;
   const r = p.readiness, tw = p.this_week, race = p.target_race, shape = p.shape;
   const upcoming = [...tw.sessions, ...p.next_week].filter((s) => s.day >= t && s.status === 'Planned' && s.session !== 'Strength');
@@ -95,6 +95,7 @@ async function today() {
   const form = fit.at(-1);
   const days = race ? Math.round((parse(race.day) - parse(t)) / 864e5) : null;
   const zc = zoneColor(r.zone);
+  const ro = race ? ol.races.find((o) => o.race_id === race.id) : null;
   const advice = { High: 'You’re well recovered — a good day for the key session.', Moderate: 'Recovered enough to train as planned.',
     Low: 'Some strain showing — keep today easy or shorten the session.', Poor: 'Your body is asking for rest — easy movement only today.' }[r.zone] || '';
   show(
@@ -124,7 +125,8 @@ async function today() {
           h('div', { class: 'note', style: 'margin:0' }, `Fitness ${form.fitness} · fatigue ${form.fatigue} · ramp ${form.ramp > 0 ? '+' : ''}${form.ramp}/wk`)) : null)),
     race ? h('div', { class: 'card race-card' },
       h('div', {}, h('div', { class: 'label' }, 'Next race'), h('div', { class: 'big' }, race.name),
-        h('div', { class: 'note', style: 'margin:0' }, `${d3.utcFormat('%a %b %-d')(parse(race.day))} · ${+race.distance_km.toFixed(1)} km${race.goal_time_s ? ` · goal ${race.goal_time_s < 3600 ? `${Math.floor(race.goal_time_s / 60)}:${String(race.goal_time_s % 60).padStart(2, "0")}` : hm(race.goal_time_s)}` : ''}`)),
+        h('div', { class: 'note', style: 'margin:0' }, `${d3.utcFormat('%a %b %-d')(parse(race.day))} · ${+race.distance_km.toFixed(1)} km${race.goal_time_s ? ` · goal ${race.goal_time_s < 3600 ? `${Math.floor(race.goal_time_s / 60)}:${String(race.goal_time_s % 60).padStart(2, "0")}` : hm(race.goal_time_s)}` : ''}`),
+        ro?.verdict ? h('a', { href: '#races', class: 'verdict-line' }, verdictPill(ro), h('span', { class: 'note', style: 'margin:0' }, ` ${gapText(ro)}`)) : null),
       h('div', { class: 'countdown' }, h('b', {}, days), h('span', {}, days === 1 ? 'day' : 'days')),
       shape ? h('div', { class: 'shape' }, h('div', { class: 'label' }, `Endurance shape for ${+race.distance_km.toFixed(1)} km`),
         h('div', { class: 'big' }, `${shape.pct}%`),
@@ -277,6 +279,38 @@ async function plan() {
   }
 }
 
+// ---- race outlook ----
+const verdictCls = (v) => ({ 'On track': 'good', 'Within reach': 'reach', Stretch: 'stretch', Ambitious: 'far' }[v] || '');
+const clockT = (s) => (s == null ? '—' : s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(Math.round(s % 60)).padStart(2, '0')}` : pace(s));
+const verdictPill = (o) => (o?.verdict ? h('span', { class: `verdict ${verdictCls(o.verdict)}` }, o.verdict) : null);
+const gapT = (s) => (s < 60 ? `${Math.round(s)} s` : clockT(s));
+const gapText = (o) => (o.gap_s == null ? null : o.gap_s <= 0 ? `${gapT(-o.gap_s)} faster than goal` : `${gapT(o.gap_s)} (${(o.gap_pct * 100).toFixed(1)}%) slower than goal`);
+
+function outlookCard(o, llmOn, onChange) {
+  const fact = (label, value, sub) => h('div', { class: 'fact' }, h('div', { class: 'label' }, label), h('div', { class: 'fact-v' }, value), sub ? h('div', { class: 'note', style: 'margin:0' }, sub) : null);
+  const b = o.best_effort;
+  const facts = h('div', { class: 'facts' },
+    fact('Goal', clockT(o.goal_time_s), o.goal_pace_s ? `${pace(o.goal_pace_s)} /km` : 'No goal set'),
+    fact('Estimate today', clockT(o.estimate_s), o.predicted_s ? `Watch prediction (from ${o.predicted_from})` : b ? 'From your best recent run' : 'Not enough data'),
+    fact('Best recent run', b ? `${b.km} km · ${pace(b.pace_s)} /km` : '—', b ? `${d3.utcFormat('%b %-d')(parse(b.day))} · ≈ ${clockT(b.equivalent_s)} for the race` : 'Last 8 weeks'),
+    o.goal_pace_s ? fact('At goal pace', `${o.goal_pace_km_4w} km`, `Last 4 weeks · ${o.runs_4w} runs`) : null,
+    fact('Endurance shape', `${o.shape.pct}%`, `${o.shape.weekly_km} of ${o.shape.weekly_target} km/week`));
+  const ins = o.insight;
+  const out = h('div', { class: 'coach-note', style: ins ? null : 'display:none' }, ins ? [h('div', { class: 'label' }, `Coach’s reading · ${ins.today ? 'today' : d3.utcFormat('%b %-d')(parse(ins.day))}`), ins.text] : null);
+  const btn = h('button', { class: 'link', onclick: async () => {
+    btn.disabled = true; btn.textContent = 'Thinking… (a local model can take a minute or two)';
+    try { await api(`/races/${o.race_id}/outlook`, { method: 'POST', body: JSON.stringify({ force: !!ins?.today }) }); onChange(); }
+    catch (e) { btn.disabled = false; btn.textContent = `Failed: ${e.message}`; }
+  } }, ins?.today ? 'Ask again' : 'Ask the coach to explain');
+  return h('div', { class: 'card outlook' },
+    h('div', { class: 'row', style: 'justify-content:space-between;margin:0 0 4px' },
+      h('h3', {}, o.race, ' ', h('span', { class: `pill ${o.priority}` }, o.priority)), verdictPill(o)),
+    h('p', { class: 'note' }, `${d3.utcFormat('%a %b %-d')(parse(o.day))} · ${+o.distance_km.toFixed(1)} km · ${o.weeks_to_go} weeks to go${gapText(o) ? ` · ${gapText(o)}` : ''}`),
+    facts,
+    o.goal_time_s ? [out, llmOn ? h('div', { style: 'margin-top:8px' }, btn) : h('p', { class: 'note' }, 'Turn on the local AI (HC_LLM_PROVIDER) for a written explanation.')]
+      : h('p', { class: 'note' }, 'Add a goal time (Edit) to see whether you’re on track for it.'));
+}
+
 // ---- race assistant chat ----
 state.chat = state.chat || [];
 function assistantCard(list, status) {
@@ -329,7 +363,7 @@ function assistantCard(list, status) {
 }
 
 async function races() {
-  const [list, status] = await Promise.all([api('/races'), api('/assistant').catch(() => ({ enabled: false }))]);
+  const [list, status, ol] = await Promise.all([api('/races'), api('/assistant').catch(() => ({ enabled: false })), api('/races/outlook').catch(() => ({ races: [] }))]);
   const form = h('form', { class: 'race', onsubmit: async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
@@ -357,6 +391,10 @@ async function races() {
   show(
     h('h1', {}, 'Races'),
     h('p', { class: 'lede' }, 'Your training plan is built around these. A = main race (full build and taper), B = tune-up (mini-taper, easy days after), C = training race (replaces that week’s hard session).'),
+    ol.races.length ? [h('h2', { style: 'margin-top:0' }, 'Am I on track?'),
+      h('p', { class: 'note' }, 'Your goal pace against what your watch predicts and what your recent runs show. Verdicts: on track, within reach (≤2% off), stretch (≤5%), ambitious.'),
+      h('div', { class: 'grid' }, ol.races.map((o) => outlookCard(o, ol.llm, () => { resetCache(); races(); }))),
+      h('div', { style: 'height:24px' })] : null,
     assistantCard(list, status),
     h('div', { style: 'height:16px' }),
     card('Add a race manually', null, form),
@@ -486,6 +524,38 @@ async function recovery() {
   timeChart(boxes.stress, rows.filter((r) => r.stress_avg != null), { h: 200, bars: [{ key: 'stress_avg', name: 'Stress', color: (r) => (r.stress_avg >= 40 ? color(3) : css('--grey')) }] });
 }
 
+// ---- COROS connection ----
+async function corosBanner() {
+  const el = $('#banner');
+  let st;
+  try { st = await api('/coros'); } catch { return; }
+  state.coros = st;
+  if (st.provider !== 'coros-mcp' || st.connected) { el.replaceChildren(); return; }
+  const err = h('div', { class: 'error', style: 'font-size:13px' });
+  const connect = h('button', { class: 'primary', onclick: async () => {
+    connect.disabled = true;
+    try { location.href = (await api('/coros/connect', { method: 'POST', body: '{}' })).url; }
+    catch (e) { connect.disabled = false; err.textContent = e.message; }
+  } }, 'Connect COROS');
+  const pasteIn = h('input', { placeholder: 'Paste the address of the page you landed on (http://localhost/homecoach-coros-callback?code=…)', style: 'flex:1' });
+  const pasteForm = h('form', { class: 'chat-form', style: 'display:none;margin-top:10px', onsubmit: async (e) => {
+    e.preventDefault();
+    try { await api('/coros/paste', { method: 'POST', body: JSON.stringify({ url: pasteIn.value.trim() }) }); resetCache(); corosBanner(); route(); }
+    catch (e2) { err.textContent = e2.message; }
+  } }, pasteIn, h('button', { class: 'primary', type: 'submit' }, 'Finish'));
+  const alt = h('button', { class: 'link', onclick: async () => {
+    try {
+      const { url } = await api('/coros/connect', { method: 'POST', body: JSON.stringify({ paste: true }) });
+      window.open(url, '_blank', 'noopener'); pasteForm.style.display = 'flex'; pasteIn.focus();
+    } catch (e) { err.textContent = e.message; }
+  } }, 'Login doesn’t come back here?');
+  el.replaceChildren(h('div', { class: 'banner' },
+    h('div', {}, h('b', {}, 'Connect your COROS account'),
+      h('div', { class: 'note', style: 'margin:2px 0 0' }, st.error ? `Last attempt failed: ${st.error}` : 'Sign in once with COROS. homecoach keeps a token, not your password, and syncs every 10 minutes.')),
+    h('div', { class: 'row', style: 'margin:0;gap:4px' }, connect, alt),
+    pasteForm, err));
+}
+
 // ---- router -----------------------------------------------------------------------------------
 
 const pages = { today, overview, plan, races, trends, recovery };
@@ -499,7 +569,9 @@ async function syncStatus() {
   try {
     const cfg = await api('/config');
     const st = Object.values(cfg.sync || {})[0];
-    $('#sync').textContent = st?.last_sync ? `Synced ${d3.timeFormat('%H:%M')(new Date(st.last_sync))}` : 'Waiting for first sync';
+    $('#sync').replaceChildren(st?.last_sync ? `Synced ${d3.timeFormat('%H:%M')(new Date(st.last_sync))}` : 'Waiting for first sync',
+      state.coros?.connected ? h('button', { class: 'link', title: `Connected to COROS since ${state.coros.connected_at ? new Date(state.coros.connected_at).toLocaleDateString() : '?'}. Click to disconnect.`,
+        onclick: async () => { if (confirm('Disconnect COROS? Syncing stops until you connect again.')) { await api('/coros/disconnect', { method: 'POST' }); corosBanner().then(syncStatus); } } }, '· COROS ✓') : '');
   } catch { $('#sync').textContent = ''; }
 }
 try { if (localStorage.getItem('hc.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch {}
@@ -512,4 +584,4 @@ $('#theme').addEventListener('click', () => {
 window.addEventListener('hashchange', route);
 let resizeT; window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(route, 250); });
 setInterval(() => { resetCache(); syncStatus(); if ((location.hash.slice(1) || 'today') !== 'races') route(); }, 10 * 60 * 1000);
-route(); syncStatus();
+route(); corosBanner().then(syncStatus);

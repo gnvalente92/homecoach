@@ -15,9 +15,11 @@ Rules:
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from statistics import mean, pstdev
+from typing import Any
 
 DAY = timedelta(days=1)
 
@@ -416,6 +418,93 @@ def endurance_shape(runs: list[Run], today: date, race_km: float) -> dict:
         "longest_km": round(longest, 1),
         "long_target": long_t,
     }
+
+
+# ---- race outlook: can the goal pace be held? ----------------------------------------------------
+
+STANDARD_KM = {"5k": 5.0, "10k": 10.0, "half": 21.0975, "marathon": 42.195}
+RIEGEL = 1.06
+
+
+def riegel(time_s: float, from_km: float, to_km: float) -> float:
+    """Equivalent time at another distance (Riegel's formula)."""
+    return time_s * (to_km / from_km) ** RIEGEL
+
+
+def predicted_time(predictions: dict | None, km: float) -> tuple[float, str] | None:
+    """The watch's race prediction for this distance, scaled from the nearest standard distance."""
+    have = {k: v for k, v in (predictions or {}).items() if k in STANDARD_KM and v}
+    if not have:
+        return None
+    key = min(have, key=lambda k: abs(math.log(STANDARD_KM[k] / km)))
+    t = riegel(have[key], STANDARD_KM[key], km)
+    return t, key
+
+
+def best_effort(runs: list[Run], today: date, km: float, weeks: int = 8) -> dict | None:
+    """The recent run (3 km or longer) that converts to the fastest time at the race distance."""
+    best = None
+    for r in runs:
+        if r.type != "Run" or not r.duration_s or r.km < 3 or not today - weeks * 7 * DAY < r.day <= today:
+            continue
+        eq = riegel(r.duration_s, r.km, km)
+        if best is None or eq < best["equivalent_s"]:
+            best = {
+                "day": r.day,
+                "km": round(r.km, 2),
+                "time_s": r.duration_s,
+                "pace_s": round(r.duration_s / r.km),
+                "equivalent_s": round(eq),
+            }
+    return best
+
+
+VERDICTS = [(0.0, "On track"), (0.02, "Within reach"), (0.05, "Stretch")]
+
+
+def verdict(gap_pct: float) -> str:
+    """gap_pct: how much slower the current estimate is than the goal (0.03 = 3% slower)."""
+    return next((v for limit, v in VERDICTS if gap_pct <= limit), "Ambitious")
+
+
+def race_outlook(race: RaceIn, runs: list[Run], today: date, predictions: dict | None = None) -> dict:
+    """Rule facts on whether the goal time is realistic: the watch prediction, the best recent effort,
+    time spent at goal pace in the last 4 weeks, endurance shape and weeks left."""
+    km = race.distance_km
+    pred = predicted_time(predictions, km)
+    effort = best_effort(runs, today, km)
+    # the estimate: the watch prediction if there is one, otherwise the best recent effort
+    estimate = round(pred[0]) if pred else effort["equivalent_s"] if effort else None
+    out: dict[str, Any] = {
+        "race_id": race.id,
+        "race": race.name,
+        "day": race.day,
+        "distance_km": km,
+        "priority": race.priority,
+        "weeks_to_go": round((race.day - today).days / 7, 1),
+        "goal_time_s": race.goal_time_s,
+        "goal_pace_s": round(race.goal_time_s / km) if race.goal_time_s else None,
+        "predicted_s": round(pred[0]) if pred else None,
+        "predicted_from": pred[1] if pred else None,
+        "best_effort": effort,
+        "estimate_s": estimate,
+        "estimate_pace_s": round(estimate / km) if estimate else None,
+        "shape": endurance_shape(runs, today, km),
+        "gap_s": None,
+        "gap_pct": None,
+        "verdict": None,
+    }
+    if race.goal_time_s:
+        gp = race.goal_time_s / km
+        recent = [r for r in runs if r.type == "Run" and r.pace_s and today - 28 * DAY < r.day <= today]
+        out["goal_pace_km_4w"] = round(sum(r.km for r in recent if r.pace_s <= gp * 1.01), 1)
+        out["runs_4w"] = len(recent)
+        out["fastest_pace_4w_s"] = round(min(r.pace_s for r in recent)) if recent else None
+        if estimate:
+            out["gap_s"] = estimate - race.goal_time_s
+            out["gap_pct"] = round((estimate - race.goal_time_s) / race.goal_time_s, 4)
+            out["verdict"] = verdict(out["gap_pct"])
+    return out
 
 
 # ---- races --------------------------------------------------------------------------------------

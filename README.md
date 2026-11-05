@@ -19,6 +19,10 @@ doing. It's built for TrueNAS SCALE and runs on any Docker host. Everything stay
   day-by-day changes within safe limits. You accept or dismiss each one. It also reviews your week every Sunday.
 - **Race assistant** (optional, local AI): "Add Corrida do Sporting, I want 49 minutes". It searches the web, reads the
   official page and shows you a race card. Nothing is saved until you click Add.
+- **Am I on track?** For every race with a goal time: your goal pace against the watch's race prediction, your best
+  recent run converted to the race distance, kilometres run at goal pace in the last 4 weeks and your endurance shape,
+  with a verdict (*on track*, *within reach*, *stretch* or *ambitious*). The local AI can explain it in plain words and
+  suggest two or three things to focus on.
 - **Overview, Trends and Recovery**: totals compared with the previous period, a fitness / fatigue / form chart, pace vs
   heart rate, running efficiency, activity and step calendars, sleep stages, HRV and resting HR against your baseline,
   and stress.
@@ -43,6 +47,10 @@ Pages load instantly because they read from the local database. A collector keep
 |---|---|
 | ![Sleep stages, HRV and resting HR against baselines](docs/screenshots/recovery.png) | ![This week's sessions and the coach panel](docs/screenshots/plan.png) |
 
+| Am I on track? | |
+|---|---|
+| ![Race outlook: goal pace vs prediction and recent runs, with the coach's reading](docs/screenshots/race-outlook.png) | |
+
 | Light theme | Mobile |
 |---|---|
 | ![Today in the light theme](docs/screenshots/today-light.png) | <img src="docs/screenshots/today-mobile.png" alt="Today on a phone" width="300"> |
@@ -58,7 +66,7 @@ Pages load instantly because they read from the local database. A collector keep
 | Service     | What it does                                                                                      |
 |-------------|---------------------------------------------------------------------------------------------------|
 | `db`        | Postgres 16. Your data lives here and in the FIT archive.                                         |
-| `web`       | API and UI on port 8080. Runs database migrations on start.                                       |
+| `web`       | API and UI on port 8742. Runs database migrations on start.                                       |
 | `collector` | Incremental sync every `HC_SYNC_INTERVAL_MINUTES`, full re-sync nightly, imports `/data/fit-inbox`. |
 | `backup`    | Daily gzipped `pg_dump` into your backup dataset, keeping 14 days.                                |
 | `grafana`   | Optional, in `docker-compose.grafana.yml`.                                                         |
@@ -69,6 +77,13 @@ Providers live in `backend/src/homecoach/providers/` and map vendor data into on
 (`activities`, `daily_metrics`, `fitness_snapshots`). To add Garmin, Strava or anything else, implement the
 `Provider` protocol in `providers/base.py` and register it in `providers/__init__.py`.
 
+- **`coros-mcp`** (recommended): the official [COROS MCP server](https://mcp.coros.com). Click **Connect COROS** in
+  the app and sign in on the COROS page; homecoach stores a token, never your password. It brings activities, daily
+  steps, calories, stress, sleep stages and sleep score, bedtime, HRV, resting HR, training load, VO2max and race
+  predictions. Check it with `sudo docker exec ix-homecoach-web-1 homecoach coros-check`.
+  - If COROS's sign-in won't send you back to homecoach (some login servers only accept `localhost` addresses), use
+    **Login doesn't come back here?** in the banner: sign in in the new tab, then copy the address of the page you
+    land on (it fails to load, which is expected) and paste it into homecoach.
 - **`coros`**: the COROS Training Hub web API.
   > ⚠️ This API is **unofficial and undocumented**. It's what `training.coros.com` uses, reverse-engineered by
   > community projects, and it can change or break without notice. The client reads fields defensively and stores raw
@@ -117,7 +132,8 @@ The repo is cloned onto the NAS, your settings live in a `.env` file **outside**
          - /mnt/tank/apps/homecoach/src/docker-compose.grafana.yml   # remove this line if you don't want Grafana
        env_file: /mnt/tank/apps/homecoach/.env
    ```
-4. Open `http://<nas>:8742`, and Grafana at `http://<nas>:3742` if you included it. The first sync backfills your history.
+4. Open `http://<nas>:8742`, and Grafana at `http://<nas>:3742` if you included it. Click **Connect COROS** in the banner
+   and sign in with COROS. The first sync then backfills your history.
 
 **Update:** run `cd /mnt/tank/apps/homecoach/src && sudo git pull && sudo docker pull ghcr.io/gnvalente92/homecoach:latest`,
 then **Stop** and **Start** the app.
@@ -131,6 +147,9 @@ On any other Docker host: `docker compose --env-file .env -f docker-compose.yml 
 
 Both features run fully on your own server, with no API costs, using **Ollama** for the model and **SearXNG**
 for web search. They're off until you enable them.
+
+- **Race outlook** (Races page): "Ask the coach to explain" turns the on-track facts into a short reading and 2–3 focus
+  points. It's cached for the day and refreshed for your target race with the Sunday review.
 
 - **Race assistant** (Races page): type something like "add Corrida do Sporting, I want 49 minutes". It searches the web,
   reads the official page and shows a race card. **Nothing is saved until you click Add.**
@@ -175,8 +194,8 @@ The most common ones:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `HC_PROVIDER` | `coros` | `coros` or `none` (FIT inbox only) |
-| `HC_COROS_EMAIL` / `HC_COROS_PASSWORD` | – | Stored only in `.env` on your server |
+| `HC_PROVIDER` | `coros-mcp` | `coros-mcp` (official, connect in the app), `coros` (web API) or `none` (FIT inbox only) |
+| `HC_COROS_EMAIL` / `HC_COROS_PASSWORD` | – | Only for `coros`. Stored only in `.env` on your server |
 | `HC_COROS_REGION` | `eu` | `eu`, `en` (Americas) or `cn` |
 | `HC_SYNC_INTERVAL_MINUTES` | `10` | Incremental sync frequency |
 | `HC_THRESHOLD_PACE` | – | Override, e.g. `4:50` |
@@ -200,7 +219,7 @@ locally as well.
 ## Privacy
 
 The repository contains no personal data. Your credentials, races, activities and health metrics stay in `.env`, Postgres
-and the FIT archive on your own server. The app makes outbound calls only to your configured provider.
+and the FIT archive on your own server. The app makes outbound calls only to your configured provider (and, if enabled, your own SearXNG for race lookups).
 
 ## License
 
