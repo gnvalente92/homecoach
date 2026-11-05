@@ -136,7 +136,10 @@ def health() -> dict:
 @app.get("/api/config")
 def config(db: Session = Db) -> dict:
     s = get_settings()
-    states = {st.key: st.value for st in db.scalars(select(SyncState))}
+    from homecoach.coros_auth import KEY as COROS_AUTH_KEY
+
+    # sync progress only: the COROS connection (tokens) lives in the same table and must never leave the server
+    states = {st.key: st.value for st in db.scalars(select(SyncState).where(SyncState.key != COROS_AUTH_KEY))}
     return {"athlete_name": s.athlete_name, "timezone": s.timezone, "provider": s.provider, "sync": states, "today": today()}
 
 

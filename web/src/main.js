@@ -573,7 +573,7 @@ async function route() {
 async function syncStatus() {
   try {
     const cfg = await api('/config');
-    const st = Object.values(cfg.sync || {})[0];
+    const st = Object.values(cfg.sync || {}).filter((x) => x?.last_sync).sort((a, b) => (a.last_sync < b.last_sync ? 1 : -1))[0];
     $('#sync').replaceChildren(st?.last_sync ? `Synced ${d3.timeFormat('%H:%M')(new Date(st.last_sync))}` : 'Waiting for first sync',
       state.coros?.connected ? h('button', { class: 'link', title: `Connected to COROS since ${state.coros.connected_at ? new Date(state.coros.connected_at).toLocaleDateString() : '?'}. Click to disconnect.`,
         onclick: async () => { if (confirm('Disconnect COROS? Syncing stops until you connect again.')) { await api('/coros/disconnect', { method: 'POST' }); corosBanner().then(syncStatus); } } }, '· COROS ✓') : '');
