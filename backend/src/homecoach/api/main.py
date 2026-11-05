@@ -462,10 +462,11 @@ def coros_connect(body: ConnectBody, request: Request, db: Session = Db) -> dict
 
     redirect = str(request.base_url).rstrip("/") + "/api/coros/callback"
     try:
-        url = coros_auth.start(get_settings(), db, redirect, FALLBACK_REDIRECT, use_fallback=body.paste)
+        url, paste = coros_auth.start(get_settings(), db, redirect, FALLBACK_REDIRECT, use_fallback=body.paste)
     except (MCPError, httpx.HTTPError) as e:
+        db.rollback()
         raise HTTPException(502, f"Couldn't start the COROS login: {e}") from e
-    return {"url": url}
+    return {"url": url, "paste": paste}
 
 
 @app.get("/api/coros/callback", include_in_schema=False)

@@ -532,28 +532,33 @@ async function corosBanner() {
   state.coros = st;
   if (st.provider !== 'coros-mcp' || st.connected) { el.replaceChildren(); return; }
   const err = h('div', { class: 'error', style: 'font-size:13px' });
-  const connect = h('button', { class: 'primary', onclick: async () => {
-    connect.disabled = true;
-    try { location.href = (await api('/coros/connect', { method: 'POST', body: '{}' })).url; }
-    catch (e) { connect.disabled = false; err.textContent = e.message; }
-  } }, 'Connect COROS');
-  const pasteIn = h('input', { placeholder: 'Paste the address of the page you landed on (http://localhost/homecoach-coros-callback?code=…)', style: 'flex:1' });
-  const pasteForm = h('form', { class: 'chat-form', style: 'display:none;margin-top:10px', onsubmit: async (e) => {
+  const pasteIn = h('input', { placeholder: 'http://localhost/homecoach-coros-callback?code=…', style: 'flex:1' });
+  const pasteForm = h('form', { class: 'chat-form', onsubmit: async (e) => {
     e.preventDefault();
-    try { await api('/coros/paste', { method: 'POST', body: JSON.stringify({ url: pasteIn.value.trim() }) }); resetCache(); corosBanner(); route(); }
+    try { await api('/coros/paste', { method: 'POST', body: JSON.stringify({ url: pasteIn.value.trim() }) }); resetCache(); await corosBanner(); syncStatus(); route(); }
     catch (e2) { err.textContent = e2.message; }
   } }, pasteIn, h('button', { class: 'primary', type: 'submit' }, 'Finish'));
-  const alt = h('button', { class: 'link', onclick: async () => {
+  const pasteSteps = (url) => el.replaceChildren(h('div', { class: 'banner' },
+    h('div', { style: 'flex-basis:100%' }, h('b', {}, 'Connect your COROS account'),
+      h('ol', { class: 'steps' },
+        h('li', {}, h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Sign in with COROS ↗'), ' (opens a new tab).'),
+        h('li', {}, 'After you sign in, the tab shows an error page at ', h('code', {}, 'localhost/homecoach-coros-callback…'), '. That’s expected: COROS only sends logins back to https or to localhost.'),
+        h('li', {}, 'Copy the full address from that tab’s address bar and paste it here:'))),
+    pasteForm, err));
+  const begin = async (paste) => {
+    err.textContent = '';
     try {
-      const { url } = await api('/coros/connect', { method: 'POST', body: JSON.stringify({ paste: true }) });
-      window.open(url, '_blank', 'noopener'); pasteForm.style.display = 'flex'; pasteIn.focus();
+      const out = await api('/coros/connect', { method: 'POST', body: JSON.stringify({ paste }) });
+      if (out.paste) pasteSteps(out.url); else location.href = out.url;
     } catch (e) { err.textContent = e.message; }
-  } }, 'Login doesn’t come back here?');
+  };
+  const connect = h('button', { class: 'primary', onclick: async () => { connect.disabled = true; await begin(false); connect.disabled = false; } }, 'Connect COROS');
+  const alt = h('button', { class: 'link', onclick: () => begin(true) }, 'Login doesn’t come back here?');
   el.replaceChildren(h('div', { class: 'banner' },
     h('div', {}, h('b', {}, 'Connect your COROS account'),
       h('div', { class: 'note', style: 'margin:2px 0 0' }, st.error ? `Last attempt failed: ${st.error}` : 'Sign in once with COROS. homecoach keeps a token, not your password, and syncs every 10 minutes.')),
     h('div', { class: 'row', style: 'margin:0;gap:4px' }, connect, alt),
-    pasteForm, err));
+    err));
 }
 
 // ---- router -----------------------------------------------------------------------------------
