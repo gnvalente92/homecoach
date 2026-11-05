@@ -163,6 +163,13 @@ for web search. They're off until you enable them.
   than 15% over your longest recent run; the model is told why and asked to revise. A review runs automatically every
   Sunday at 19:00, and there's also a "Review my week now" button.
 
+The coach also reviews strength training. It can recommend a session with its duration, exercises and reason, update a
+planned strength session, or remove one when recovery or your schedule calls for it. Accepted strength work appears
+alongside any run on that day; it never replaces the run or adds kilometres to running totals. Application limits allow
+up to two strength sessions per week, at most 60 minutes each, and block race-day additions or changes to completed
+strength workouts. These limits do not assess whether an exercise or load suits you. Tell the coach about your experience,
+equipment and restrictions; recommendations remain pending until accepted.
+
 **Enable on TrueNAS**
 
 1. Create a dataset `…/homecoach/ollama` (preset Apps) for the model files.

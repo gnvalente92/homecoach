@@ -126,6 +126,7 @@ class Session:
     status: str = "Planned"  # Planned | Done | Rest
     adjusted: bool = False  # changed by an accepted coach suggestion
     reason: str = ""
+    duration_min: int | None = None
 
 
 @dataclass
@@ -138,6 +139,7 @@ class Adjustment:
     detail: str | None = None
     move_to: date | None = None
     reason: str = ""
+    duration_min: int | None = None
 
 
 def _main_planned(items: list[Session], d: date) -> Session | None:
@@ -150,7 +152,16 @@ def apply_adjustments(items: list[Session], adjustments: list[Adjustment]) -> li
     out = [Session(**x.__dict__) for x in items]
     for a in adjustments:
         cur = _main_planned(out, a.day)
-        if a.action == "skip":
+        if a.action == "strength":
+            out = [x for x in out if not (x.day == a.day and x.session == "Strength" and x.status == "Planned")]
+            if a.duration_min:
+                out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
+                out.append(
+                    Session(a.day, "Strength", detail=a.detail or "", adjusted=True, reason=a.reason, duration_min=a.duration_min)
+                )
+            elif not any(x.day == a.day for x in out):
+                out.append(Session(a.day, "Rest", status="Rest", adjusted=True, reason=a.reason))
+        elif a.action == "skip":
             if cur:
                 out.remove(cur)
             out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
@@ -179,10 +190,29 @@ def apply_adjustments(items: list[Session], adjustments: list[Adjustment]) -> li
 
 def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longest_recent: float, today: date) -> str | None:
     """Guardrails. Returns a reason when the change is not allowed (the model is asked to revise), else None."""
-    if a.action not in ("replace", "shorten", "skip", "move"):
-        return "action must be replace, shorten, skip or move"
+    if a.action not in ("replace", "shorten", "skip", "move", "strength"):
+        return "action must be replace, shorten, skip, move or strength"
     if a.day < today:
         return f"{a.day} is in the past; you can only change today or later"
+    if a.action == "strength":
+        if type(a.duration_min) is not int or not 0 <= a.duration_min <= 60:
+            return "strength duration_min must be a whole number from 0 (remove) to 60"
+        if a.km not in (None, 0) or a.pace or a.move_to:
+            return "strength uses duration_min, not km, pace or move_to"
+        if any(x.day == a.day and x.session == "Strength" and x.status == "Done" for x in week):
+            return "strength training is already recorded on this day"
+        if a.duration_min and not (a.detail or "").strip():
+            return "describe the strength session and its exercises"
+        if a.duration_min and any(x.day == a.day and "race:" in x.session.lower() for x in week):
+            return "do not add strength training on race day"
+        if a.duration_min == 0 and not any(x.day == a.day and x.session == "Strength" and x.status == "Planned" for x in week):
+            return "there is no planned strength session to remove"
+        after = apply_adjustments(week, [a])
+        if sum(x.session == "Strength" and x.status in ("Planned", "Done") for x in after) > 2:
+            return "coach suggestions are limited to two strength sessions per week"
+        return None
+    if a.session == "Strength" or a.duration_min is not None:
+        return "use the strength action for strength sessions"
     if any(x.day == a.day and x.status == "Done" and x.session != "Strength" for x in week) and a.action != "skip":
         return f"a workout is already recorded on {a.day}"
     if a.action in ("shorten", "move", "skip") and a.action != "skip" and not _main_planned(week, a.day):
@@ -625,7 +655,7 @@ def race_plan(races: list[RaceIn], b: Baseline) -> list[Week]:
 
 
 def _strength(d: date) -> Session:
-    return Session(d, "Strength", detail="45 min, legs and core (single-leg work, calves, hips). Lighter in race weeks")
+    return Session(d, "Strength", detail="Legs and core (single-leg work, calves, hips). Lighter in race weeks", duration_min=45)
 
 
 def _lay(
@@ -771,11 +801,12 @@ def this_week(
             out.append(
                 Session(
                     a.day,
-                    a.sport,
+                    "Strength" if a.type == "Strength" else a.sport,
                     round(a.km, 2) if a.km else 0,
                     f"{fmt_pace(a.pace_s)} /km" if a.pace_s else "",
                     f"{a.duration_s // 60} min" + (f" · avg HR {a.avg_hr}" if a.avg_hr else "") if a.duration_s else "",
                     status="Done",
+                    duration_min=a.duration_s // 60 if a.duration_s and a.type == "Strength" else None,
                 )
             )
     ran_today = any(x.day == today for x in wk_runs)

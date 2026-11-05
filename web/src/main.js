@@ -51,6 +51,7 @@ function sessionsGrid(list, todayIso) {
     h('div', { class: 'day' }, h('span', {}, fDay(parse(s.day))), h('span', {}, s.adjusted ? h('span', { class: 'pill adj', title: s.reason }, 'coach') : s.status === 'Planned' ? '' : s.status)),
     h('div', { class: 'name' }, s.session),
     s.km ? h('div', { class: 'km' }, `${s.km} km`) : null,
+    s.duration_min && s.status !== 'Done' ? h('div', { class: 'km' }, `${s.duration_min} min`) : null,
     s.pace ? h('div', { class: 'pace' }, s.pace) : null,
     s.detail ? h('div', { class: 'detail' }, s.detail) : null,
     s.adjusted && s.reason && s.status !== 'Rest' ? h('div', { class: 'detail adj-reason' }, `Coach: ${s.reason}`) : null)));
@@ -192,12 +193,13 @@ state.coachChat = state.coachChat || [];
 async function coachPanel(onChange) {
   const st = await api('/coach').catch(() => ({ enabled: false, suggestions: [], notes: [], checkins: [] }));
   const actionText = (x) => ({ skip: 'Skip', shorten: `Shorten to ${x.km} km`, move: `Move to ${x.move_to ? d3.utcFormat('%a')(parse(x.move_to)) : '?'}`,
+    strength: x.duration_min ? `Strength · ${x.duration_min} min` : 'Skip strength',
     replace: `${x.session}${x.km ? ` · ${x.km} km` : ''}${x.pace ? ` · ${x.pace}` : ''}` }[x.action] || x.action);
   const pending = st.suggestions.filter((x) => x.status === 'pending');
   const decided = st.suggestions.filter((x) => x.status !== 'pending').slice(0, 4);
   const sugCard = (x) => h('div', { class: `proposal ${x.status}` },
     h('div', {}, h('div', { class: 'next-name' }, `${fDay(parse(x.day))}: ${actionText(x)}`),
-      x.detail && x.action === 'replace' ? h('div', { class: 'note', style: 'margin:2px 0' }, x.detail) : null,
+      x.detail && ['replace', 'strength'].includes(x.action) ? h('div', { class: 'note', style: 'margin:2px 0' }, x.detail) : null,
       h('div', { class: 'note', style: 'margin:2px 0 0' }, x.reason)),
     x.status === 'pending' ? h('div', { class: 'row', style: 'margin:0;gap:6px' },
       h('button', { class: 'primary', onclick: async (e) => {

@@ -719,7 +719,7 @@ def set_suggestion(sid: int, body: SuggestionStatus, db: Session = Db) -> dict:
             raise HTTPException(409, "suggestion is outside this week and next week; request a new review")
         week = p["this_week"]["sessions"] if x.day < b.next_monday else p["next_week"]
         target = p["this_week"]["target_km"] if x.day < b.next_monday else p["next_week_target_km"]
-        a = E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason)
+        a = E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min)
         why = E.check_adjustment(a, week, target, b.longest_km, today())
         if why:
             raise HTTPException(409, why)
@@ -749,7 +749,7 @@ def accepted_adjustments(db: Session, start: date) -> list[E.Adjustment]:
         .where(CoachSuggestion.status == "accepted", CoachSuggestion.day >= start)
         .order_by(CoachSuggestion.created_at, CoachSuggestion.id)
     )
-    return [E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason) for x in rows]
+    return [E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min) for x in rows]
 
 
 def compute_plan(db: Session) -> dict:

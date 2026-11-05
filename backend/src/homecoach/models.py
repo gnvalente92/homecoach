@@ -124,6 +124,7 @@ class CoachSuggestion(Base):
     pace: Mapped[str | None] = mapped_column(String(40))
     detail: Mapped[str | None] = mapped_column(Text)
     move_to: Mapped[date | None] = mapped_column(Date)
+    duration_min: Mapped[int | None] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(10), default="chat")  # chat | review
     status: Mapped[str] = mapped_column(String(10), default="pending", index=True)  # pending | accepted | dismissed
