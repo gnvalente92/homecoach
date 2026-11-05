@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import respx
 
+from homecoach import coros_auth
 from homecoach.api import main as api
 from homecoach.providers import coros_mcp as P
 
@@ -190,8 +191,13 @@ def mock_coros(state):
         )
     )
 
-    def register(req):
+    def register(req):  # like COROS: remote addresses must be https, loopback http is fine
         body = json.loads(req.content)
+        state.setdefault("registrations", []).append(body["redirect_uris"])
+        if any(not coros_auth.redirect_allowed(u) for u in body["redirect_uris"]):
+            return httpx.Response(
+                400, json={"error": "invalid_redirect_uri", "error_description": "Remote redirect_uri must use https"}
+            )
         state["redirect_uris"] = body["redirect_uris"]
         return httpx.Response(201, json={"client_id": "hc-client", "redirect_uris": body["redirect_uris"]})
 
@@ -246,19 +252,21 @@ def test_connect_callback_and_sync(client, monkeypatch):
     mock_coros(state)
     assert client.get("/api/coros").json()["connected"] is False
 
-    url = client.post("/api/coros/connect", json={}).json()["url"]
-    q = parse_qs(urlsplit(url).query)
-    assert url.startswith(f"{AS}/authorize") and q["code_challenge_method"] == ["S256"] and q["resource"] == [MCP]
-    assert q["redirect_uri"][0].endswith("/api/coros/callback") and len(state["redirect_uris"]) == 2
+    # the app is on plain http on the LAN: only the localhost address is registered, and the user pastes it back
+    out = client.post("/api/coros/connect", json={}).json()
+    q = parse_qs(urlsplit(out["url"]).query)
+    assert out["paste"] is True and out["url"].startswith(f"{AS}/authorize")
+    assert q["code_challenge_method"] == ["S256"] and q["resource"] == [MCP]
+    assert q["redirect_uri"] == [api.FALLBACK_REDIRECT] and state["registrations"] == [[api.FALLBACK_REDIRECT]]
 
     monkeypatch.setattr(api, "_start_first_sync", lambda: None)
-    bad = client.get("/api/coros/callback", params={"code": "the-code", "state": "wrong"}, follow_redirects=False)
-    assert bad.status_code == 400
-    ok = client.get("/api/coros/callback", params={"code": "the-code", "state": q["state"][0]}, follow_redirects=False)
-    assert ok.status_code == 303 and client.get("/api/coros").json()["connected"] is True
+    landed = f"{api.FALLBACK_REDIRECT}?code=the-code&state=wrong"
+    assert client.post("/api/coros/paste", json={"url": landed}).status_code == 400
+    landed = f"{api.FALLBACK_REDIRECT}?code=the-code&state={q['state'][0]}"
+    r = client.post("/api/coros/paste", json={"url": landed})
+    assert r.status_code == 200 and r.json()["connected"] is True
 
     # sync through the provider, with one expired token on the way (refresh, retry)
-    from homecoach import coros_auth
     from homecoach.collector.sync import sync_provider
     from homecoach.providers.coros_mcp import CorosMCPProvider
 
@@ -292,3 +300,28 @@ def test_paste_fallback_rejects_bad_url(client):
 
 def test_today_window_helper():
     assert (date(2026, 11, 5) - timedelta(days=7)).isoformat() == "2026-10-29"
+
+
+@respx.mock
+def test_connect_over_https_comes_straight_back(client, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    s = api.get_settings()
+    monkeypatch.setattr(s, "coros_mcp_url", "https://mcp.coros.test/mcp")
+    state: dict = {}
+    mock_coros(state)
+    https = TestClient(api.app, base_url="https://coach.example")
+    out = https.post("/api/coros/connect", json={}).json()
+    q = parse_qs(urlsplit(out["url"]).query)
+    assert out["paste"] is False and q["redirect_uri"] == ["https://coach.example/api/coros/callback"]
+    assert sorted(state["redirect_uris"]) == sorted([api.FALLBACK_REDIRECT, "https://coach.example/api/coros/callback"])
+    monkeypatch.setattr(api, "_start_first_sync", lambda: None)
+    ok = https.get("/api/coros/callback", params={"code": "the-code", "state": q["state"][0]}, follow_redirects=False)
+    assert ok.status_code == 303 and https.get("/api/coros").json()["connected"] is True
+    assert https.post("/api/coros/connect", json={"paste": True}).json()["paste"] is True  # the manual fallback still works
+
+
+def test_redirect_allowed():
+    assert coros_auth.redirect_allowed("https://coach.example/cb")
+    assert coros_auth.redirect_allowed("http://localhost/homecoach-coros-callback")
+    assert not coros_auth.redirect_allowed("http://192.168.1.20:8742/api/coros/callback")

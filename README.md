@@ -81,9 +81,10 @@ Providers live in `backend/src/homecoach/providers/` and map vendor data into on
   the app and sign in on the COROS page; homecoach stores a token, never your password. It brings activities, daily
   steps, calories, stress, sleep stages and sleep score, bedtime, HRV, resting HR, training load, VO2max and race
   predictions. Check it with `sudo docker exec ix-homecoach-web-1 homecoach coros-check`.
-  - If COROS's sign-in won't send you back to homecoach (some login servers only accept `localhost` addresses), use
-    **Login doesn't come back here?** in the banner: sign in in the new tab, then copy the address of the page you
-    land on (it fails to load, which is expected) and paste it into homecoach.
+  - COROS only sends a login back to an `https` address or to `localhost`. If you open homecoach over plain
+    `http://<nas>:8742`, the banner walks you through one extra step: sign in in a new tab, and when that tab lands on
+    an error page at `localhost/homecoach-coros-callback…` (expected), copy its address and paste it into homecoach.
+    Behind an https reverse proxy, the login comes straight back instead.
 - **`coros`**: the COROS Training Hub web API.
   > ⚠️ This API is **unofficial and undocumented**. It's what `training.coros.com` uses, reverse-engineered by
   > community projects, and it can change or break without notice. The client reads fields defensively and stores raw

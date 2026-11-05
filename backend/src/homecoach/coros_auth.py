@@ -37,23 +37,42 @@ def status(db: Db) -> dict:
     }
 
 
+LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+
+
+def redirect_allowed(uri: str) -> bool:
+    """OAuth servers only send the browser back to https addresses or to this computer (loopback)."""
+    p = urlsplit(uri)
+    return p.scheme == "https" or (p.hostname or "") in LOOPBACK
+
+
 def start(
     s: Settings, db: Db, redirect_uri: str, fallback_uri: str, use_fallback: bool = False, http: httpx.Client | None = None
-) -> str:
-    """Discover, register (both redirect addresses, once) and return the COROS login URL.
-    use_fallback: send the browser back to the fallback address (which won't load) so the user pastes it."""
+) -> tuple[str, bool]:
+    """Discover, register and return (COROS login URL, paste) where paste=True means the browser lands on the
+    fallback address (which won't load) and the user pastes it back into homecoach.
+    Plain-http LAN addresses (http://nas:8742) are refused by COROS, so those always use the paste step."""
     http = http or httpx.Client(timeout=30, follow_redirects=True)
     st = load(db)
     server = mcp_client.resolve_server_url(s.coros_mcp_url, http)
     meta = mcp_client.discover(server, http)
-    uris = sorted({redirect_uri, fallback_uri})
+    direct = redirect_allowed(redirect_uri) and not use_fallback
+    uris = sorted({fallback_uri, redirect_uri} if redirect_allowed(redirect_uri) else {fallback_uri})
     client = st.get("client")
     if not client or sorted(client.get("redirect_uris", [])) != uris or st.get("meta", {}).get("issuer") != meta["issuer"]:
-        client = mcp_client.register(meta, uris, http)
-    url, pending = mcp_client.authorization_url(meta, client, fallback_uri if use_fallback else redirect_uri)
+        try:
+            client = mcp_client.register(meta, uris, http)
+        except mcp_client.MCPError as e:
+            if len(uris) == 1 or "redirect" not in str(e):
+                raise
+            # this server refuses our own address: fall back to the paste step
+            client, direct = mcp_client.register(meta, [fallback_uri], http), False
+    if redirect_uri not in client.get("redirect_uris", []):
+        direct = False
+    url, pending = mcp_client.authorization_url(meta, client, redirect_uri if direct else fallback_uri)
     st.update({"server_url": server, "meta": meta, "client": client, "pending": pending})
     save(db, st)
-    return url
+    return url, not direct
 
 
 def finish(db: Db, code: str, state: str, http: httpx.Client | None = None) -> None:
