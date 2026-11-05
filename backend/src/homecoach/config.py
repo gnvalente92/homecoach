@@ -30,6 +30,20 @@ class Settings(BaseSettings):
 
     web_dir: Path = Path("/app/web")
 
+    # Optional LLM for the race assistant and the coach. "none" switches both off.
+    #   openai    = any OpenAI-compatible server: Ollama (default URL), llama.cpp, LM Studio, vLLM, OpenRouter...
+    #   anthropic = Claude API (needs HC_LLM_API_KEY)
+    llm_provider: Literal["none", "openai", "anthropic"] = "none"
+    llm_base_url: str = "http://ollama:11434/v1"
+    llm_model: str = "qwen2.5:3b"
+    llm_api_key: SecretStr | None = None
+    llm_timeout_s: int = 600
+    # Self-hosted web search used by the race assistant (SearXNG with the JSON format enabled)
+    searxng_url: str = "http://searxng:8080"
+    # Weekly coach review (local time): day of week 0=Mon..6=Sun and hour
+    coach_review_dow: int = 6
+    coach_review_hour: int = 19
+
     # Optional HTTP basic auth for the web app and API (recommended if reachable beyond your LAN).
     auth_user: str | None = None
     auth_password: SecretStr | None = None

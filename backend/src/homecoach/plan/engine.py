@@ -122,6 +122,90 @@ class Session:
     pace: str = ""
     detail: str = ""
     status: str = "Planned"  # Planned | Done | Rest
+    adjusted: bool = False  # changed by an accepted coach suggestion
+    reason: str = ""
+
+
+@dataclass
+class Adjustment:
+    day: date
+    action: str  # replace | shorten | skip | move
+    session: str | None = None
+    km: float | None = None
+    pace: str | None = None
+    detail: str | None = None
+    move_to: date | None = None
+    reason: str = ""
+
+
+def _main_planned(items: list[Session], d: date) -> Session | None:
+    """The run planned on day d (ignores strength and done/rest entries)."""
+    return next((x for x in items if x.day == d and x.status == "Planned" and x.session != "Strength"), None)
+
+
+def apply_adjustments(items: list[Session], adjustments: list[Adjustment]) -> list[Session]:
+    """Apply accepted coach changes to a week's sessions. Done sessions are never touched."""
+    out = [Session(**x.__dict__) for x in items]
+    for a in adjustments:
+        cur = _main_planned(out, a.day)
+        if a.action == "skip":
+            if cur:
+                out.remove(cur)
+            out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
+            out.append(Session(a.day, "Rest", status="Rest", detail=a.reason, adjusted=True, reason=a.reason))
+        elif a.action == "shorten" and cur and a.km is not None:
+            cur.km, cur.adjusted, cur.reason = half(a.km), True, a.reason
+        elif a.action == "move" and cur and a.move_to:
+            out.remove(cur)
+            out = [x for x in out if not (x.day == a.move_to and x.status == "Rest")]
+            displaced = _main_planned(out, a.move_to)
+            if displaced:
+                out.remove(displaced)
+            out.append(Session(**{**cur.__dict__, "day": a.move_to, "adjusted": True, "reason": a.reason}))
+            out.append(Session(a.day, "Rest", status="Rest", detail=f"Moved to {a.move_to:%a}", adjusted=True, reason=a.reason))
+        elif a.action == "replace":
+            if cur:
+                out.remove(cur)
+            out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
+            out.append(
+                Session(
+                    a.day, a.session or "Easy run", half(a.km or 0), a.pace or "", a.detail or "", adjusted=True, reason=a.reason
+                )
+            )
+    return sorted(out, key=lambda x: (x.day, x.status != "Done"))
+
+
+def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longest_recent: float, today: date) -> str | None:
+    """Guardrails. Returns a reason when the change is not allowed (the model is asked to revise), else None."""
+    if a.action not in ("replace", "shorten", "skip", "move"):
+        return "action must be replace, shorten, skip or move"
+    if a.day < today:
+        return f"{a.day} is in the past; you can only change today or later"
+    if any(x.day == a.day and x.status == "Done" and x.session != "Strength" for x in week) and a.action != "skip":
+        return f"a workout is already recorded on {a.day}"
+    if a.action in ("shorten", "move", "skip") and a.action != "skip" and not _main_planned(week, a.day):
+        return f"there is no planned run on {a.day} to {a.action}"
+    if a.action == "move":
+        if not a.move_to or a.move_to < today:
+            return "move_to must be a future date"
+        if monday(a.move_to) != monday(a.day):
+            return "moves must stay within the same week"
+    km = a.km or 0
+    if a.action in ("replace", "shorten"):
+        if km < 0 or km > 42.5:
+            return "km must be between 0 and 42.5"
+        cap = max(12.0, longest_recent * 1.15)
+        if km > cap:
+            return (
+                f"{km:g} km is more than 15% over the longest recent run ({longest_recent:g} km); "
+                f"keep it at or under {cap:.1f} km"
+            )
+    after = apply_adjustments(week, [a])
+    total = sum(x.km for x in after if x.session != "Strength")
+    limit = target_km * 1.10 + 1
+    if total > limit:
+        return f"this makes the week {total:.1f} km, over the safe limit of {limit:.1f} km (plan {target_km:g} km + 10%)"
+    return None
 
 
 # ---- helpers ------------------------------------------------------------------------------------

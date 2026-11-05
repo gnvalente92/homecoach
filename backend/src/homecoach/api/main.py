@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from homecoach import __version__
 from homecoach.config import get_settings
 from homecoach.db import get_session
-from homecoach.models import Activity, DailyMetric, FitnessSnapshot, Race, SyncState
+from homecoach.models import Activity, CheckIn, CoachNote, CoachSuggestion, DailyMetric, FitnessSnapshot, Race, SyncState
 from homecoach.plan import engine as E
 
 app = FastAPI(title="homecoach", version=__version__)
@@ -329,11 +329,161 @@ def delete_race(race_id: int, db: Session = Db) -> None:
     db.delete(r)
 
 
+# ---- race assistant -----------------------------------------------------------------------------
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4000)
+
+
+class ChatBody(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=30)
+
+
+@app.get("/api/assistant")
+def assistant_status() -> dict:
+    from homecoach import llm
+
+    s = get_settings()
+    return {"enabled": llm.enabled(s), "provider": s.llm_provider, "model": s.llm_model}
+
+
+@app.post("/api/assistant/chat")
+def assistant_chat(body: ChatBody, db: Session = Db) -> dict:
+    from homecoach.assistant import chat
+    from homecoach.llm import LLMError
+
+    if body.messages[-1].role != "user":
+        raise HTTPException(422, "the last message must be from the user")
+    races = [race_out(r) for r in db.scalars(select(Race).where(Race.day >= today()).order_by(Race.day))]
+    try:
+        return jsonable(chat(get_settings(), [m.model_dump() for m in body.messages], today(), races))
+    except LLMError as e:
+        raise HTTPException(503, str(e)) from e
+
+
+# ---- coach ------------------------------------------------------------------------------------
+
+_review_lock = threading.Lock()
+
+
+def run_review(source: str = "review") -> dict:
+    """Weekly review (also used by the collector). Uses its own DB session."""
+    from homecoach import coach
+    from homecoach.db import session_scope
+
+    with _review_lock, session_scope() as db:
+        return coach.run(
+            get_settings(), db, jsonable(compute_plan(db)), today(), [{"role": "user", "content": coach.REVIEW_PROMPT}], source
+        )
+
+
+@app.get("/api/coach")
+def coach_state(db: Session = Db) -> dict:
+    from homecoach import coach, llm
+
+    s = get_settings()
+    notes = db.scalars(select(CoachNote).order_by(CoachNote.created_at.desc()).limit(5))
+    sugg = db.scalars(
+        select(CoachSuggestion)
+        .where(CoachSuggestion.day >= E.monday(today()))
+        .order_by(CoachSuggestion.created_at.desc())
+        .limit(30)
+    )
+    checks = db.scalars(select(CheckIn).order_by(CheckIn.created_at.desc()).limit(10))
+    return jsonable(
+        {
+            "enabled": llm.enabled(s),
+            "provider": s.llm_provider,
+            "model": s.llm_model,
+            "review_running": _review_lock.locked(),
+            "notes": [{"id": n.id, "kind": n.kind, "text": n.text, "created_at": n.created_at} for n in notes],
+            "suggestions": [coach.suggestion_out(x) for x in sugg],
+            "checkins": [{"id": c.id, "day": c.day, "text": c.text} for c in checks],
+        }
+    )
+
+
+@app.post("/api/coach/chat")
+def coach_chat(body: ChatBody, db: Session = Db) -> dict:
+    from homecoach import coach
+    from homecoach.llm import LLMError
+
+    if body.messages[-1].role != "user":
+        raise HTTPException(422, "the last message must be from the user")
+    db.add(CheckIn(day=today(), text=body.messages[-1].content.strip()))  # the coach remembers what you tell it
+    db.commit()  # keep the check-in even if the model call fails
+    try:
+        out = coach.run(get_settings(), db, jsonable(compute_plan(db)), today(), [m.model_dump() for m in body.messages], "chat")
+    except LLMError as e:
+        raise HTTPException(503, str(e)) from e
+    return jsonable(out)
+
+
+@app.post("/api/coach/review", status_code=202)
+def coach_review() -> dict:
+    from homecoach import llm
+
+    if not llm.enabled(get_settings()):
+        raise HTTPException(503, "No LLM is configured: set HC_LLM_PROVIDER in .env.")
+    if _review_lock.locked():
+        return {"started": False, "running": True}
+
+    def go() -> None:
+        try:
+            run_review()
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("coach review failed")
+
+    threading.Thread(target=go, daemon=True).start()
+    return {"started": True}
+
+
+class SuggestionStatus(BaseModel):
+    status: Literal["accepted", "dismissed", "pending"]
+
+
+@app.post("/api/coach/suggestions/{sid}")
+def set_suggestion(sid: int, body: SuggestionStatus, db: Session = Db) -> dict:
+    from homecoach import coach
+
+    x = db.get(CoachSuggestion, sid)
+    if not x:
+        raise HTTPException(404, "suggestion not found")
+    x.status = body.status
+    return jsonable(coach.suggestion_out(x))
+
+
+@app.delete("/api/coach/checkins/{cid}", status_code=204)
+def delete_checkin(cid: int, db: Session = Db) -> None:
+    x = db.get(CheckIn, cid)
+    if not x:
+        raise HTTPException(404, "check-in not found")
+    db.delete(x)
+
+
 # ---- plan ---------------------------------------------------------------------------------------
 
 
 @app.get("/api/plan")
 def plan(db: Session = Db) -> dict:
+    return jsonable(compute_plan(db))
+
+
+def accepted_adjustments(db: Session, start: date) -> list[E.Adjustment]:
+    rows = db.scalars(
+        select(CoachSuggestion)
+        .where(CoachSuggestion.status == "accepted", CoachSuggestion.day >= start)
+        .order_by(CoachSuggestion.created_at)
+    )
+    return [E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason) for x in rows]
+
+
+def compute_plan(db: Session) -> dict:
+    """The rule plan for this and next week with accepted coach changes applied (shared by the API and the coach)."""
     t = today()
     acts = list(db.scalars(select(Activity).where(Activity.local_date >= t - timedelta(days=70))))
     rows = list(db.scalars(select(DailyMetric).where(DailyMetric.day >= t - timedelta(days=35)).order_by(DailyMetric.day)))
@@ -343,20 +493,23 @@ def plan(db: Session = Db) -> dict:
     r = E.readiness(b)
     weeks = E.race_plan(races, b)
     tw, done_km, target_km = E.this_week(runs, b, races, r, done=runs)
+    nw = E.next_week(b, weeks, r)
+    adj = accepted_adjustments(db, E.monday(t))
+    tw = E.apply_adjustments(tw, [a for a in adj if a.day < b.next_monday])
+    nw = E.apply_adjustments(nw, [a for a in adj if a.day >= b.next_monday])
     tr = E.target_race(races, t)
-    return jsonable(
-        {
-            "athlete_name": get_settings().athlete_name,
-            "baseline": b,
-            "readiness": r,
-            "target_race": tr,
-            "this_week": {"sessions": tw, "done_km": done_km, "target_km": target_km},
-            "next_week": E.next_week(b, weeks, r),
-            "race_plan": weeks,
-            "road": E.road(runs, weeks, b),
-            "shape": {**E.endurance_shape(runs, t, tr.distance_km), "race": tr.name} if tr else None,
-        }
-    )
+    return {
+        "athlete_name": get_settings().athlete_name,
+        "baseline": b,
+        "readiness": r,
+        "target_race": tr,
+        "this_week": {"sessions": tw, "done_km": done_km, "target_km": target_km},
+        "next_week": nw,
+        "next_week_target_km": round(sum(x.km for x in E.next_week(b, weeks, r) if x.session != "Strength"), 1),
+        "race_plan": weeks,
+        "road": E.road(runs, weeks, b),
+        "shape": {**E.endurance_shape(runs, t, tr.distance_km), "race": tr.name} if tr else None,
+    }
 
 
 @app.get("/api/fitness")

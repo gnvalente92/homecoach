@@ -4,4 +4,5 @@ include:
   - path:
       - /mnt/tank/apps/homecoach/src/docker-compose.yml
       - /mnt/tank/apps/homecoach/src/docker-compose.grafana.yml
+      - /mnt/tank/apps/homecoach/src/docker-compose.llm.yml       # optional local AI (race assistant + coach)
     env_file: /mnt/tank/apps/homecoach/.env

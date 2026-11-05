@@ -98,3 +98,42 @@ class SyncState(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CheckIn(Base):
+    """Something the athlete told the coach: how they feel, niggles, travel, schedule."""
+
+    __tablename__ = "checkins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CoachSuggestion(Base):
+    """A change to one day of the plan proposed by the coach. Only 'accepted' ones alter the plan."""
+
+    __tablename__ = "coach_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    action: Mapped[str] = mapped_column(String(10))  # replace | shorten | skip | move
+    session: Mapped[str | None] = mapped_column(String(80))
+    km: Mapped[float | None] = mapped_column(Float)
+    pace: Mapped[str | None] = mapped_column(String(40))
+    detail: Mapped[str | None] = mapped_column(Text)
+    move_to: Mapped[date | None] = mapped_column(Date)
+    reason: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(10), default="chat")  # chat | review
+    status: Mapped[str] = mapped_column(String(10), default="pending", index=True)  # pending | accepted | dismissed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CoachNote(Base):
+    __tablename__ = "coach_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(10))  # review | chat
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

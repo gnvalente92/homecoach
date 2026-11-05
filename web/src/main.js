@@ -46,11 +46,12 @@ function sessionsGrid(list, todayIso) {
   return h('div', { class: 'sessions' }, list.map((s) =>
     h('div', { class: `session ${s.status}${s.day === todayIso ? ' today' : ''}`,
       style: s.status === 'Planned' ? `border-top-color:${/Long/.test(s.session) ? color(0) : /race|Race/.test(s.session) ? color(1) : /session|Threshold|Sharpener|Intervals/.test(s.session) ? color(3) : css('--grey')}` : null },
-    h('div', { class: 'day' }, h('span', {}, fDay(parse(s.day))), h('span', {}, s.status === 'Planned' ? '' : s.status)),
+    h('div', { class: 'day' }, h('span', {}, fDay(parse(s.day))), h('span', {}, s.adjusted ? h('span', { class: 'pill adj', title: s.reason }, 'coach') : s.status === 'Planned' ? '' : s.status)),
     h('div', { class: 'name' }, s.session),
     s.km ? h('div', { class: 'km' }, `${s.km} km`) : null,
     s.pace ? h('div', { class: 'pace' }, s.pace) : null,
-    s.detail ? h('div', { class: 'detail' }, s.detail) : null)));
+    s.detail ? h('div', { class: 'detail' }, s.detail) : null,
+    s.adjusted && s.reason && s.status !== 'Rest' ? h('div', { class: 'detail adj-reason' }, `Coach: ${s.reason}`) : null)));
 }
 
 function periodSeg(onChange) {
@@ -181,6 +182,57 @@ async function overview() {
   timeChart(boxes.sleep, weekly.filter((w) => w.avg_sleep_h != null), { x: 'week', step: 'week', h: 160, yfmt: f1, bars: [{ key: 'avg_sleep_h', name: 'Avg sleep h', color: color(4), fmt: f1 }] });
 }
 
+// ---- coach panel ----
+state.coachChat = state.coachChat || [];
+async function coachPanel(onChange) {
+  const st = await api('/coach').catch(() => ({ enabled: false, suggestions: [], notes: [], checkins: [] }));
+  const actionText = (x) => ({ skip: 'Skip', shorten: `Shorten to ${x.km} km`, move: `Move to ${x.move_to ? d3.utcFormat('%a')(parse(x.move_to)) : '?'}`,
+    replace: `${x.session}${x.km ? ` · ${x.km} km` : ''}${x.pace ? ` · ${x.pace}` : ''}` }[x.action] || x.action);
+  const pending = st.suggestions.filter((x) => x.status === 'pending');
+  const decided = st.suggestions.filter((x) => x.status !== 'pending').slice(0, 4);
+  const sugCard = (x) => h('div', { class: `proposal ${x.status}` },
+    h('div', {}, h('div', { class: 'next-name' }, `${fDay(parse(x.day))}: ${actionText(x)}`),
+      x.detail && x.action === 'replace' ? h('div', { class: 'note', style: 'margin:2px 0' }, x.detail) : null,
+      h('div', { class: 'note', style: 'margin:2px 0 0' }, x.reason)),
+    x.status === 'pending' ? h('div', { class: 'row', style: 'margin:0;gap:6px' },
+      h('button', { class: 'primary', onclick: async () => { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'accepted' }) }); resetCache(); onChange(); } }, 'Accept'),
+      h('button', { class: 'link', onclick: async () => { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'dismissed' }) }); onChange(); } }, 'Dismiss'))
+      : h('span', { class: 'note', style: 'margin:0' }, x.status === 'accepted' ? 'Accepted ✓' : 'Dismissed'));
+  const log = h('div', { class: 'chat-log' });
+  const render = () => { log.replaceChildren(...state.coachChat.map((m) => h('div', { class: `msg ${m.role}` }, h('div', { class: 'bubble' }, m.content)))); log.scrollTop = log.scrollHeight; };
+  const input = h('input', { placeholder: st.enabled ? 'How is it going? e.g. “calf is sore”, “travelling Thu–Sat”, “tempo felt easy”' : 'Coach not set up', disabled: st.enabled ? null : '' });
+  const send = h('button', { class: 'primary', type: 'submit', disabled: st.enabled ? null : '' }, 'Send');
+  const form = h('form', { class: 'chat-form', onsubmit: async (e) => {
+    e.preventDefault();
+    const text = input.value.trim(); if (!text) return;
+    state.coachChat.push({ role: 'user', content: text }); input.value = ''; send.disabled = true;
+    state.coachChat.push({ role: 'assistant', content: 'Looking at your training… (a local model can take a minute or two)', pending: true }); render();
+    try {
+      const out = await api('/coach/chat', { method: 'POST', body: JSON.stringify({ messages: state.coachChat.filter((m) => !m.pending).map(({ role, content }) => ({ role, content })) }) });
+      state.coachChat.pop(); state.coachChat.push({ role: 'assistant', content: out.reply });
+      if (out.suggestions.length) { onChange(); return; }
+    } catch (err) { state.coachChat.pop(); state.coachChat.push({ role: 'assistant', content: `Sorry — ${err.message}` }); }
+    send.disabled = false; render();
+  } }, input, send);
+  const review = h('button', { class: 'link', disabled: st.enabled && !st.review_running ? null : '', onclick: async () => {
+    review.disabled = true; review.textContent = 'Reviewing… (refresh in a few minutes)';
+    await api('/coach/review', { method: 'POST' }).catch(() => {});
+  } }, st.review_running ? 'Review running…' : 'Review my week now');
+  const lastNote = st.notes[0];
+  render();
+  return card('Coach', st.enabled ? `Adjusts the rule plan to how your training is going. Reviews automatically every Sunday evening. Model: ${st.model}.`
+    : 'Needs an LLM: set HC_LLM_PROVIDER in .env (see the README for local Ollama).', [
+    lastNote && !state.coachChat.length ? h('div', { class: 'coach-note' }, h('div', { class: 'label' }, `${lastNote.kind === 'review' ? 'Weekly review' : 'Last reply'} · ${d3.timeFormat('%a %H:%M')(new Date(lastNote.created_at))}`), lastNote.text) : null,
+    pending.length ? h('div', { class: 'label', style: 'margin-top:12px' }, `Suggested changes (${pending.length})`) : null,
+    ...pending.map(sugCard),
+    decided.length ? h('details', { style: 'margin-top:8px' }, h('summary', { class: 'note' }, 'Earlier suggestions'), ...decided.map(sugCard)) : null,
+    h('div', { style: 'height:10px' }), log, form,
+    h('div', { class: 'row', style: 'justify-content:space-between;margin:8px 0 0' },
+      h('span', { class: 'note', style: 'margin:0' }, st.checkins.length ? `Remembers ${st.checkins.length} recent check-in${st.checkins.length > 1 ? 's' : ''}.` : 'What you tell the coach is remembered as a check-in.'),
+      review),
+  ]);
+}
+
 async function plan() {
   const [p, cfg] = await Promise.all([load('plan', '/plan'), load('config', '/config')]);
   const race = p.target_race;
@@ -200,13 +252,15 @@ async function plan() {
       return seg;
     })(), week === 'this' ? h('span', { class: 'note', style: 'margin:0' }, `${p.this_week.done_km} km done of ~${p.this_week.target_km} km`) : null),
     sessionsGrid(list, cfg.today),
+    h('div', { style: 'height:16px' }),
+    await coachPanel(() => { resetCache(); plan(); }),
     race ? h('h2', {}, 'Road to race day') : null,
     race ? card('Weekly distance', 'Grey: what you actually ran. Colour: the plan by phase. Line: long run.', [
       h('div', { class: 'legend' }, ['Base', 'Build', 'Peak', 'Taper', 'Race week'].map((x) => h('span', {}, h('span', { class: 'sw', style: `background:${phaseColor(x)}` }), x))),
       roadBox]) : null,
     race ? h('div', { style: 'height:16px' }) : null,
     race ? card('Week by week', 'Every fourth week is easier; B and C races reshape their week.', tableBox) : null,
-    h('p', { class: 'note' }, 'Rule-based, not a coach. Skip or shorten anything if you feel run-down or sore.'),
+    h('p', { class: 'note' }, 'The rules set the backbone; the coach (if enabled) only suggests day-by-day changes within safe limits. Skip or shorten anything if you feel run-down or sore.'),
   );
   if (race) {
     timeChart(roadBox, p.road, { x: 'week', step: 'week', h: 260, yfmt: f1,
@@ -221,8 +275,59 @@ async function plan() {
   }
 }
 
+// ---- race assistant chat ----
+state.chat = state.chat || [];
+function assistantCard(list, status) {
+  const log = h('div', { class: 'chat-log' });
+  const fmtGoal = (g) => g || '—';
+  const proposalCard = (p) => {
+    const existing = p.race_id ? list.find((r) => r.id === p.race_id) : null;
+    const btn = h('button', { class: 'primary', onclick: async () => {
+      btn.disabled = true;
+      try {
+        const body = { name: p.name, date: p.date, distance_km: Number(p.distance_km), goal_time: p.goal_time || null, priority: p.priority || 'A',
+          notes: [p.location, p.start_time && `start ${p.start_time}`, p.notes, p.source_url].filter(Boolean).join(' · ') || null };
+        await api(existing ? `/races/${existing.id}` : '/races', { method: existing ? 'PUT' : 'POST', body: JSON.stringify(body) });
+        p.saved = true; resetCache(); races();
+      } catch (e) { btn.disabled = false; btn.textContent = `Failed: ${e.message}`; }
+    } }, p.saved ? 'Saved ✓' : existing ? 'Update race' : 'Add to calendar');
+    if (p.saved) btn.disabled = true;
+    return h('div', { class: 'proposal' },
+      h('div', {}, h('div', { class: 'next-name' }, p.name),
+        h('div', { class: 'note', style: 'margin:2px 0' }, `${d3.utcFormat('%a %b %-d, %Y')(parse(p.date))} · ${+Number(p.distance_km).toFixed(2)} km · goal ${fmtGoal(p.goal_time)} · priority ${p.priority}`),
+        p.location || p.start_time ? h('div', { class: 'note', style: 'margin:0' }, [p.location, p.start_time && `start ${p.start_time}`].filter(Boolean).join(' · ')) : null,
+        p.source_url ? h('a', { href: p.source_url, target: '_blank', rel: 'noopener', class: 'note' }, 'Source') : null),
+      btn);
+  };
+  const render = () => {
+    log.replaceChildren(...state.chat.map((m) => h('div', { class: `msg ${m.role}` },
+      h('div', { class: 'bubble' }, m.content),
+      ...(m.proposals || []).map(proposalCard),
+      m.sources?.length ? h('div', { class: 'sources' }, 'Sources: ', ...m.sources.slice(0, 3).flatMap((s, i) => [i ? ' · ' : '', h('a', { href: s.url, target: '_blank', rel: 'noopener' }, s.title)])) : null)));
+    log.scrollTop = log.scrollHeight;
+  };
+  const input = h('input', { placeholder: status.enabled ? 'e.g. “Add Corrida do Sporting, I want 49 minutes”' : 'Assistant not set up', disabled: status.enabled ? null : '' });
+  const send = h('button', { class: 'primary', type: 'submit', disabled: status.enabled ? null : '' }, 'Send');
+  const formEl = h('form', { class: 'chat-form', onsubmit: async (e) => {
+    e.preventDefault();
+    const text = input.value.trim(); if (!text) return;
+    state.chat.push({ role: 'user', content: text }); input.value = ''; send.disabled = true;
+    state.chat.push({ role: 'assistant', content: 'Searching and reading the race page… (a local model can take a minute or two)', pending: true }); render();
+    try {
+      const out = await api('/assistant/chat', { method: 'POST', body: JSON.stringify({ messages: state.chat.filter((m) => !m.pending).map(({ role, content }) => ({ role, content })) }) });
+      state.chat.pop(); state.chat.push({ role: 'assistant', content: out.reply, proposals: out.proposals, sources: out.sources });
+    } catch (err) { state.chat.pop(); state.chat.push({ role: 'assistant', content: `Sorry — ${err.message}` }); }
+    send.disabled = false; render(); input.focus();
+  } }, input, send);
+  if (!state.chat.length) state.chat.push({ role: 'assistant', content: status.enabled
+    ? 'Tell me about a race — name, and your goal time if you have one. I’ll look up the date and distance and show it here for you to add.'
+    : 'The race assistant needs an LLM. Set HC_LLM_PROVIDER in your .env (see the README: local Ollama + SearXNG) and restart the app. You can still use the form below.' });
+  render();
+  return card('Race assistant', `Searches the web and reads the race page${status.enabled ? ` (model: ${status.model})` : ''}. Nothing is saved until you click Add. A local model can take a minute or two.`, [log, formEl]);
+}
+
 async function races() {
-  const list = await api('/races');
+  const [list, status] = await Promise.all([api('/races'), api('/assistant').catch(() => ({ enabled: false }))]);
   const form = h('form', { class: 'race', onsubmit: async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
@@ -250,7 +355,9 @@ async function races() {
   view.replaceChildren(
     h('h1', {}, 'Races'),
     h('p', { class: 'lede' }, 'Your training plan is built around these. A = main race (full build and taper), B = tune-up (mini-taper, easy days after), C = training race (replaces that week’s hard session).'),
-    card('Add a race', null, form),
+    assistantCard(list, status),
+    h('div', { style: 'height:16px' }),
+    card('Add a race manually', null, form),
     h('h2', {}, 'Upcoming'),
     list.length ? h('div', { class: 'card tablebox' }, h('table', {},
       h('thead', {}, h('tr', {}, ['Date', 'Race', 'Distance', 'Goal', 'Pace', 'Priority', 'Days to go', ''].map((x, i) => h('th', { class: [2, 3, 4, 6].includes(i) ? 'num' : '' }, x)))),
