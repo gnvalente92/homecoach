@@ -382,6 +382,8 @@ def test_first_mcp_sync_is_full_even_after_the_web_api(monkeypatch):
     monkeypatch.setattr(collector, "import_fit_inbox", lambda *_: 0)
     monkeypatch.setattr(collector, "get_provider", lambda *_: type("P", (), {"s": type("S", (), {"state": {}})()})())
     monkeypatch.setattr(collector, "sync_provider", lambda db, p, st, full: modes.append(full) or {"mode": "x"})
+    resets = []
+    monkeypatch.setattr(collector, "reset_web_api_units", lambda db: resets.append(1))
     import homecoach.collector.sync as sync
 
     monkeypatch.setattr(sync, "get_state", lambda db, k: store.get(k, {}))
@@ -390,6 +392,7 @@ def test_first_mcp_sync_is_full_even_after_the_web_api(monkeypatch):
     collector.run_once()
     collector.run_once(full=True)
     assert modes == [True, False, True]
+    assert resets == [1]  # old-unit training load is cleared once, not on every full resync
 
 
 def test_resync_endpoint(client, monkeypatch):
@@ -417,3 +420,17 @@ def test_unquote_json_encoded_text():
     assert _unquote('"Sleep Overview\\n\\n2026-11-05\\nSleep Score: 91"') == "Sleep Overview\n\n2026-11-05\nSleep Score: 91"
     assert _unquote("plain\r\ntext") == "plain\ntext"
     assert _unquote('"not json') == '"not json'
+
+
+def test_reset_web_api_units_clears_only_training_load(client):
+    from homecoach.collector.main import reset_web_api_units
+    from homecoach.models import DailyMetric
+
+    db = next(api.app.dependency_overrides[api.get_session]())
+    db.add(DailyMetric(day=date(2026, 1, 10), load_short=1480.0, load_long=1530.0, load_ratio=0.97, steps=9000, sleep_score=80))
+    db.commit()
+    reset_web_api_units(db)
+    db.commit()
+    row = db.get(DailyMetric, date(2026, 1, 10))
+    assert row.load_short is None and row.load_long is None
+    assert row.load_ratio == 0.97 and row.steps == 9000 and row.sleep_score == 80  # everything else is kept

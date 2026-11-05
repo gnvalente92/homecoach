@@ -438,7 +438,7 @@ async function trends() {
       card('Running efficiency', 'Metres per heartbeat — higher means more speed for the same effort.', boxes.eff)),
     h('div', { style: 'height:16px' }),
     h('div', { class: 'grid' },
-      card('Training load', 'Short-term (7-day) vs long-term (28-day) load from your watch.', boxes.load),
+      card('Training load', 'Short-term vs long-term load from your watch. COROS shares the last 31 days, so this builds up over time; the fitness chart above covers the long view.', boxes.load),
       card('Load ratio', 'Short over long-term load. Under 0.8 detraining, over 1.5 excessive.', boxes.ratio)),
     h('div', { style: 'height:16px' }),
     h('div', { class: 'grid' },
