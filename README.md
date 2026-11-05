@@ -26,6 +26,11 @@ doing. It's built for TrueNAS SCALE and runs on any Docker host. Data is stored 
 - **Overview, Trends and Recovery**: totals compared with the previous period, a fitness / fatigue / form chart, pace vs
   heart rate, running efficiency, activity and step calendars, sleep stages, HRV and resting HR against your baseline,
   and stress.
+- **Goals**: recurring weekly, monthly or yearly targets for distance, time or sessions, by sport or across all sports.
+  Edit targets and follow progress from recorded activities, including strength work. Goals do not increase the plan's
+  training load automatically.
+- **Training log**: search activity names, filter by sport and dates, and page through your history. Compare monthly
+  distance, time and session totals with the same months last year; the current month compares elapsed days only.
 - **Grafana** (optional), pointed at the same database for your own analysis.
 
 Pages load instantly because they read from the local database. A collector keeps it up to date every 10 minutes, and

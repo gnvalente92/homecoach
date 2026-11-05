@@ -809,5 +809,7 @@ def fitness(days: int | None = Query(84, ge=7), db: Session = Db) -> list[dict]:
 # ---- web UI -------------------------------------------------------------------------------------
 
 from homecoach.api.static import mount_web  # noqa: E402
+from homecoach.api.training import router as training_router  # noqa: E402
 
+app.include_router(training_router)
 mount_web(app, get_settings().web_dir)

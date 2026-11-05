@@ -1,6 +1,7 @@
 import './style.css';
 import * as d3 from 'd3';
 import { timeChart, scatter, parse, fInt, f1, fDay, color, css } from './charts.js';
+import { trainingPages } from './training.js';
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $('#view');
@@ -8,7 +9,10 @@ const view = $('#view');
 const show = (...parts) => view.replaceChildren(...parts.flat().filter((x) => x != null && x !== false));
 const api = async (path, opts) => {
   const r = await fetch(`/api${path}`, { headers: { 'content-type': 'application/json' }, ...opts });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => ({}))).detail;
+    throw new Error(Array.isArray(detail) ? detail.map((item) => item.msg).join('; ') : detail || r.statusText);
+  }
   return r.status === 204 ? null : r.json();
 };
 const h = (tag, attrs = {}, ...kids) => {
@@ -606,7 +610,7 @@ $('#resync').addEventListener('click', async () => {
 
 // ---- router -----------------------------------------------------------------------------------
 
-const pages = { today, overview, plan, races, trends, recovery };
+const pages = { today, overview, plan, races, trends, recovery, ...trainingPages({ api, h, show, card, resetCache, pace, hm }) };
 async function route() {
   const name = location.hash.slice(1) || 'today';
   document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === `#${name}`));
