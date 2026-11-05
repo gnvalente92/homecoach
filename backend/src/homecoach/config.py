@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     #   coros-mcp = official COROS MCP server (recommended; connect once in the UI, no password stored)
     #   coros     = unofficial Training Hub web API (needs HC_COROS_EMAIL / HC_COROS_PASSWORD)
     #   none      = FIT inbox only
-    provider: Literal["coros-mcp", "coros", "none"] = "coros"
+    provider: Literal["coros-mcp", "coros", "none"] = "coros-mcp"
     coros_mcp_url: str = "https://mcp.coros.com/mcp"
     coros_email: str | None = None
     coros_password: SecretStr | None = None
@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     auth_password: SecretStr | None = None
 
     data_dir: Path = Path("/data")
+
+    @model_validator(mode="after")
+    def complete_auth(self) -> "Settings":
+        user = bool(self.auth_user)
+        password = bool(self.auth_password and self.auth_password.get_secret_value())
+        if user != password:
+            raise ValueError("set both HC_AUTH_USER and HC_AUTH_PASSWORD, or leave both empty")
+        return self
 
     @property
     def fit_dir(self) -> Path:

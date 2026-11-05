@@ -106,7 +106,8 @@ async function today() {
         ring(r.score, zc),
         h('div', {},
           h('div', { class: 'zone', style: `color:${zc}` }, r.zone || r.status),
-          h('div', { class: 'note', style: 'margin:2px 0 12px' }, `Plan volume at ${Math.round(r.factor * 100)}%`),
+          h('div', { class: 'note', style: 'margin:2px 0 12px' }, r.status === 'Unknown' ? 'No readiness adjustment: current signals are missing.' : `Plan volume at ${Math.round(r.factor * 100)}%`),
+          h('div', { class: 'note' }, r.reasons.join('. ')),
           h('div', { class: 'contribs' }, r.contributors.map((c) => h('div', { class: 'contrib' },
             h('div', { class: 'contrib-top' }, h('span', {}, c.name), h('b', {}, c.value)),
             h('div', { class: 'bar' }, h('div', { style: `width:${c.score}%;background:${levelColor(c.level)}` })),
@@ -199,7 +200,12 @@ async function coachPanel(onChange) {
       x.detail && x.action === 'replace' ? h('div', { class: 'note', style: 'margin:2px 0' }, x.detail) : null,
       h('div', { class: 'note', style: 'margin:2px 0 0' }, x.reason)),
     x.status === 'pending' ? h('div', { class: 'row', style: 'margin:0;gap:6px' },
-      h('button', { class: 'primary', onclick: async () => { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'accepted' }) }); resetCache(); onChange(); } }, 'Accept'),
+      h('button', { class: 'primary', onclick: async (e) => {
+        const button = e.currentTarget;
+        button.disabled = true;
+        try { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'accepted' }) }); resetCache(); onChange(); }
+        catch (err) { button.disabled = false; alert(`This suggestion cannot be applied: ${err.message}`); }
+      } }, 'Accept'),
       h('button', { class: 'link', onclick: async () => { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'dismissed' }) }); onChange(); } }, 'Dismiss'))
       : h('span', { class: 'note', style: 'margin:0' }, x.status === 'accepted' ? 'Accepted ✓' : 'Dismissed'));
   const log = h('div', { class: 'chat-log' });
@@ -256,6 +262,9 @@ async function plan() {
       return seg;
     })(), week === 'this' ? h('span', { class: 'note', style: 'margin:0' }, `${p.this_week.done_km} km done of ~${p.this_week.target_km} km`) : null),
     sessionsGrid(list, cfg.today),
+    p.inactive_suggestions?.length ? h('div', { class: 'banner bad' },
+      h('div', {}, h('b', {}, 'Some accepted coach changes no longer fit the current plan'),
+        p.inactive_suggestions.map((x) => h('p', { class: 'note' }, `${x.day}: ${x.reason}`)))) : null,
     h('div', { style: 'height:16px' }),
     await coachPanel(() => { resetCache(); plan(); }),
     race ? h('h2', {}, 'Road to race day') : null,
@@ -605,7 +614,8 @@ async function syncStatus() {
   try {
     const cfg = await api('/config');
     const st = Object.values(cfg.sync || {}).filter((x) => x?.last_sync).sort((a, b) => (a.last_sync < b.last_sync ? 1 : -1))[0];
-    $('#sync').replaceChildren(st?.last_sync ? `Synced ${d3.timeFormat('%H:%M')(new Date(st.last_sync))}` : 'Waiting for first sync',
+    const status = cfg.sync?.['collector-status'];
+    $('#sync').replaceChildren(status?.error ? `Last sync failed (${status.error}) · ` : '', st?.last_sync ? `Synced ${d3.timeFormat('%H:%M')(new Date(st.last_sync))}` : 'Waiting for first sync',
       state.coros?.connected ? h('button', { class: 'link', title: `Connected to COROS since ${state.coros.connected_at ? new Date(state.coros.connected_at).toLocaleDateString() : '?'}. Click to disconnect.`,
         onclick: async () => { if (confirm('Disconnect COROS? Syncing stops until you connect again.')) { await api('/coros/disconnect', { method: 'POST' }); corosBanner().then(syncStatus); } } }, '· COROS ✓') : '');
   } catch { $('#sync').textContent = ''; }

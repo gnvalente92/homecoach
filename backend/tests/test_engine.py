@@ -40,7 +40,8 @@ def test_readiness_levels(base):
     assert E.readiness(hot).status == "Hold" and E.readiness(hot).factor == 0.9
     bad = E.Baseline(**{**base.__dict__, "load_ratio": 1.6, "hrv": 30})
     r = E.readiness(bad)
-    assert r.status == "Back off" and r.factor == 0.75 and len(r.reasons) == 2
+    assert r.status == "Back off" and r.factor == 0.75 and r.flags == 3
+    assert any("Unavailable or stale: Sleep" in reason for reason in r.reasons)
 
 
 def test_hrv_range_falls_back_to_rolling_stats():

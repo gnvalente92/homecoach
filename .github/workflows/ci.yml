@@ -16,17 +16,17 @@ jobs:
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install -e "backend[dev]"
+      - run: pip install -c backend/constraints.txt -e "backend[dev]"
       - run: ruff check backend && ruff format --check backend
       - run: pytest backend -q
         env: { HC_WEB_DIR: /nonexistent }
       - name: migrations run from a non-editable install (as in the image)
         run: |
-          python -m venv /tmp/inst && /tmp/inst/bin/pip install -q ./backend
+          python -m venv /tmp/inst && /tmp/inst/bin/pip install -q -c backend/constraints.txt ./backend
           cd / && HC_DATABASE_URL=sqlite:////tmp/smoke.db /tmp/inst/bin/homecoach migrate
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-      - run: cd web && (npm ci || npm install) && npm run build
+      - run: cd web && npm ci && npm run build
   image:
     needs: test
     if: github.event_name != 'pull_request'

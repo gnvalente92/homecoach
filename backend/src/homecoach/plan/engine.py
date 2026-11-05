@@ -192,10 +192,16 @@ def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longe
             return "move_to must be a future date"
         if monday(a.move_to) != monday(a.day):
             return "moves must stay within the same week"
+        if a.move_to == a.day:
+            return "move_to must be a different day"
+        if any(x.day == a.move_to and x.status == "Done" and x.session != "Strength" for x in week):
+            return "a workout is already recorded on the destination day"
     km = a.km or 0
     if a.action in ("replace", "shorten"):
-        if km < 0 or km > 42.5:
+        if not 0 <= km <= 42.5:
             return "km must be between 0 and 42.5"
+        if a.action == "shorten" and (a.km is None or half(km) > _main_planned(week, a.day).km):
+            return "shorten must not increase the planned distance"
         cap = max(12.0, longest_recent * 1.15)
         if km > cap:
             return (
@@ -257,20 +263,21 @@ def estimate_threshold(runs: list[Run], today: date) -> float:
 def baseline(runs: list[Run], days: list[Day], today: date, threshold_s: float | None = None) -> Baseline:
     frm = today - 27 * DAY
     recent = [r for r in runs if r.type == "Run" and r.km and frm <= r.day <= today]
-    days = sorted(days, key=lambda d: d.day)
+    days = sorted((d for d in days if d.day <= today), key=lambda d: d.day)
+    fresh = [d for d in days if d.day >= today - DAY]
 
     def avg(xs: list[float]) -> float | None:
         xs = [x for x in xs if x is not None]
         return round(mean(xs), 1) if xs else None
 
-    last = days[-1] if days else None
+    last = next((d for d in reversed(fresh) if d.hrv_avg is not None), None)
     hrv_lo, hrv_hi = (last.hrv_lo, last.hrv_hi) if last else (None, None)
     if last and last.hrv_avg is not None and (hrv_lo is None or hrv_hi is None):
         hist = [d.hrv_avg for d in days if d.hrv_avg is not None and d.day >= today - 28 * DAY]
         if len(hist) >= 7:
             m, sd = mean(hist), pstdev(hist)
             hrv_lo, hrv_hi = round(m - sd, 1), round(m + sd, 1)
-    ratios = [d.load_ratio for d in days if d.load_ratio is not None]
+    ratios = [d.load_ratio for d in fresh if d.load_ratio is not None]
     return Baseline(
         today=today,
         next_monday=next_monday(today),
@@ -282,9 +289,11 @@ def baseline(runs: list[Run], days: list[Day], today: date, threshold_s: float |
         hrv=last.hrv_avg if last else None,
         hrv_lo=hrv_lo,
         hrv_hi=hrv_hi,
-        rhr7=avg([d.resting_hr for d in days if d.day >= today - 6 * DAY]),
+        rhr7=avg([d.resting_hr for d in days if d.day >= today - 6 * DAY])
+        if any(d.resting_hr is not None for d in fresh)
+        else None,
         rhr28=avg([d.resting_hr for d in days if d.day >= frm]),
-        sleep_last_min=next((d.sleep_min for d in reversed(days) if d.sleep_min), None),
+        sleep_last_min=next((d.sleep_min for d in reversed(fresh) if d.sleep_min), None),
         sleep7_min=avg([d.sleep_min for d in days if d.day >= today - 6 * DAY and d.sleep_min]),
     )
 
@@ -306,13 +315,19 @@ def readiness(b: Baseline) -> Readiness:
         reasons.append(f"resting HR is up {b.rhr7 - b.rhr28:.1f} bpm")
     status, factor = ("Ready", 1.0) if flags == 0 else ("Hold", 0.9) if flags == 1 else ("Back off", 0.75)
     contributors = readiness_contributors(b)
+    if not contributors:
+        return Readiness("Unknown", 1.0, 0, ["No usable readiness signals from today or yesterday; sync current health data."])
     score = zone = None
     if contributors:
         weights = {"Training load": 30, "Overnight HRV": 30, "Resting HR": 20, "Sleep": 20}
         tot = sum(weights[c.name] for c in contributors)
         score = round(sum(c.score * weights[c.name] for c in contributors) / tot)
         zone = "High" if score >= 80 else "Moderate" if score >= 60 else "Low" if score >= 40 else "Poor"
-    return Readiness(status, factor, flags, reasons or ["load, HRV and resting HR all look normal"], score, zone, contributors)
+    reasons = reasons or ["Available readiness signals show no warning flags"]
+    missing = {"Training load", "Overnight HRV", "Resting HR", "Sleep"} - {c.name for c in contributors}
+    if missing:
+        reasons.append("Unavailable or stale: " + ", ".join(sorted(missing)))
+    return Readiness(status, factor, flags, reasons, score, zone, contributors)
 
 
 def _level(score: float) -> str:

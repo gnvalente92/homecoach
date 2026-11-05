@@ -122,7 +122,7 @@ def run(s: Settings, db: Db, plan: dict, today: date, messages: list[dict[str, s
         "this": ([_to_session(x) for x in plan["this_week"]["sessions"]], plan["this_week"]["target_km"]),
         "next": ([_to_session(x) for x in plan["next_week"]], plan.get("next_week_target_km") or 0),
     }
-    longest = max([w["long_km"] for w in plan["road"] if w["kind"] == "Actual"] + [plan["baseline"]["longest_km"], 0])
+    longest = plan["baseline"]["longest_km"]
     created: list[CoachSuggestion] = []
 
     def propose(args: dict) -> str:
