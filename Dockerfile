@@ -12,8 +12,6 @@ WORKDIR /app
 COPY backend/pyproject.toml ./
 COPY backend/src ./src
 RUN pip install --no-cache-dir .
-COPY backend/alembic.ini ./
-COPY backend/migrations ./migrations
 COPY --from=web /web/dist ./web
 RUN useradd -r -u 10001 homecoach && mkdir -p /data && chown homecoach /data
 USER homecoach

@@ -29,6 +29,7 @@ homecoach = "homecoach.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/homecoach"]
+artifacts = ["src/homecoach/migrations/*.mako"]
 
 [tool.ruff]
 line-length = 130

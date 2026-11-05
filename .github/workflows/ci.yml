@@ -20,6 +20,10 @@ jobs:
       - run: ruff check backend && ruff format --check backend
       - run: pytest backend -q
         env: { HC_WEB_DIR: /nonexistent }
+      - name: migrations run from a non-editable install (as in the image)
+        run: |
+          python -m venv /tmp/inst && /tmp/inst/bin/pip install -q ./backend
+          cd / && HC_DATABASE_URL=sqlite:////tmp/smoke.db /tmp/inst/bin/homecoach migrate
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
       - run: cd web && (npm ci || npm install) && npm run build
