@@ -1,17 +1,51 @@
 # homecoach
 
-Self-hosted training dashboard and plan engine for wearable data. It runs on your own server
-(built for TrueNAS SCALE, works on any Docker host), keeps a local copy of all your data, and turns
-your race calendar into a week-by-week plan.
+**Your own training coach, running on your own server.** homecoach pulls your watch data (COROS today, more to come),
+keeps it in your own database, and turns your race calendar into a week-by-week plan that adapts to how you're actually
+doing. It's built for TrueNAS SCALE and runs on any Docker host. Everything stays at home, including the optional AI.
 
-- **Today**: readiness from load ratio, overnight HRV and resting HR; today's session and what's next; progress through the week.
-- **Training plan**: this week (what you did plus suggestions for the remaining days) and next week, built around your race calendar,
-  then a road-to-race-day chart that shows your actual weeks followed by the planned phases.
-- **Races**: a form to add or edit races with A/B/C priority and a goal time.
-- **Trends** and **Recovery**: distance, training time, pace vs HR, efficiency, training load, steps, sleep stages, HRV, resting HR, stress.
-- **Grafana** (optional), pointed at the same Postgres for ad-hoc analysis.
+![Today: readiness, today's session, this week, form and the next race](docs/screenshots/today.png)
 
-The dashboard reads only from the local database, so pages load instantly. A collector keeps that database current.
+## What it does
+
+- **Today**: a 0–100 readiness score with what's driving it (training load, overnight HRV, resting HR, sleep), each
+  compared with *your* normal range. Below that: today's session and what's next, how much of the week you've done, your
+  form, and a countdown to your next race, with an "endurance shape" showing whether your training volume is enough for
+  that distance.
+- **Training plan**: this week and next week, built around your race calendar. It moves through base, build, peak and
+  taper phases, and A, B and C races each shape the plan differently. A road-to-race-day chart shows the weeks you've
+  actually run followed by the planned ones.
+- **Coach** (optional, local AI): tell it "calf is sore", "travelling Thu–Sat" or "tempo felt easy" and it suggests
+  day-by-day changes within safe limits. You accept or dismiss each one. It also reviews your week every Sunday.
+- **Race assistant** (optional, local AI): "Add Corrida do Sporting, I want 49 minutes". It searches the web, reads the
+  official page and shows you a race card. Nothing is saved until you click Add.
+- **Overview, Trends and Recovery**: totals compared with the previous period, a fitness / fatigue / form chart, pace vs
+  heart rate, running efficiency, activity and step calendars, sleep stages, HRV and resting HR against your baseline,
+  and stress.
+- **Grafana** (optional), pointed at the same database for your own analysis.
+
+Pages load instantly because they read from the local database. A collector keeps it up to date every 10 minutes.
+
+## Screenshots
+
+<sub>Synthetic demo data.</sub>
+
+| Training plan and coach | Races and race assistant |
+|---|---|
+| ![Coach suggesting a change after a check-in](docs/screenshots/coach.png) | ![Race assistant proposing a race to add](docs/screenshots/race-assistant.png) |
+| ![Accepted change shown with a coach badge](docs/screenshots/coach-accepted.png) | ![Race calendar with A/B/C priorities](docs/screenshots/races.png) |
+
+| Overview | Trends |
+|---|---|
+| ![Headline totals with change vs previous period, and week-by-week charts](docs/screenshots/overview.png) | ![Fitness, fatigue and form chart and training charts](docs/screenshots/trends.png) |
+
+| Recovery | Training plan |
+|---|---|
+| ![Sleep stages, HRV and resting HR against baselines](docs/screenshots/recovery.png) | ![This week's sessions and the coach panel](docs/screenshots/plan.png) |
+
+| Light theme | Mobile |
+|---|---|
+| ![Today in the light theme](docs/screenshots/today-light.png) | <img src="docs/screenshots/today-mobile.png" alt="Today on a phone" width="300"> |
 
 ## How it works
 
