@@ -27,7 +27,7 @@ The dashboard reads only from the local database, so pages load instantly. A col
 | `web`       | API and UI on port 8080. Runs database migrations on start.                                       |
 | `collector` | Incremental sync every `HC_SYNC_INTERVAL_MINUTES`, full re-sync nightly, imports `/data/fit-inbox`. |
 | `backup`    | Daily gzipped `pg_dump` into your backup dataset, keeping 14 days.                                |
-| `grafana`   | Optional, started with the `grafana` profile.                                                     |
+| `grafana`   | Optional, in `docker-compose.grafana.yml`.                                                         |
 
 ### Data sources (providers)
 
@@ -60,29 +60,38 @@ Providers live in `backend/src/homecoach/providers/` and map vendor data into on
 
 The rules are simple and transparent. This is not a coach.
 
-## Install on TrueNAS SCALE
+## Install on TrueNAS SCALE (24.10 or newer)
 
-1. **Create datasets** (adjust the pool name), for example:
-   `tank/apps/homecoach/{postgres,data,backups}`.
-   Postgres runs as uid 999 in its container and the app as uid 10001, so give those users write access to their datasets,
-   or set ACLs.
-2. **Get the files** onto the NAS:
+The repo is cloned onto the NAS, your settings live in a `.env` file **outside** the repo, and a TrueNAS custom app
+*includes* the compose file. Updating then comes down to `git pull` plus restarting the app.
+
+1. **Datasets.** Create `tank/apps/homecoach` (preset **Apps**) with child datasets `postgres`, `data`, `backups`
+   and `grafana`. Replace `tank` with your pool name throughout.
+2. **Files and permissions** (System → Shell):
    ```sh
-   cd /mnt/tank/apps/homecoach && git clone https://github.com/gnvalente92/homecoach src && cd src
-   cp .env.example .env && chmod 600 .env && nano .env
+   cd /mnt/tank/apps/homecoach
+   sudo git clone https://github.com/gnvalente92/homecoach src
+   sudo cp src/.env.example .env && sudo chmod 600 .env && sudo nano .env
+   sudo chown -R 10001:10001 data      # app user inside the container
+   sudo chown -R 472:472 grafana       # grafana user
    ```
-   Fill in your COROS login, the passwords and the dataset paths. **`.env` never goes into git.**
-3. **Start it**:
-   - Shell: `docker compose --env-file .env up -d`. Add `--profile grafana` for Grafana.
-   - Or in the UI: **Apps → Discover Apps → ⋮ → Install via YAML**. Paste `docker-compose.yml` with your values filled
-     in, or point it at the cloned file.
-4. Open `http://<nas>:8080`. The first sync backfills `HC_BACKFILL_DAYS` of history, which can take a few minutes.
-   Grafana, if enabled, is at `http://<nas>:3000`.
+3. **App.** Go to **Apps → Discover Apps → ⋮ → Install via YAML**, name it `homecoach`, and paste:
+   ```yaml
+   include:
+     - path:
+         - /mnt/tank/apps/homecoach/src/docker-compose.yml
+         - /mnt/tank/apps/homecoach/src/docker-compose.grafana.yml   # remove this line if you don't want Grafana
+       env_file: /mnt/tank/apps/homecoach/.env
+   ```
+4. Open `http://<nas>:8742`, and Grafana at `http://<nas>:3742` if you included it. The first sync backfills your history.
 
-Updating: `docker compose pull && docker compose up -d`. Images are built for amd64 and arm64 on every push to `master`
-and published at `ghcr.io/gnvalente92/homecoach`.
+**Update:** run `cd /mnt/tank/apps/homecoach/src && sudo git pull && sudo docker pull ghcr.io/gnvalente92/homecoach:latest`,
+then **Stop** and **Start** the app.
 
-Restoring a backup: `gunzip -c backups/homecoach-YYYY-MM-DD.sql.gz | docker compose exec -T db psql -U homecoach homecoach`.
+**Restore a backup:** run `gunzip -c backups/homecoach-YYYY-MM-DD.sql.gz | sudo docker exec -i homecoach-db-1 psql -U homecoach homecoach`.
+Run `sudo docker ps` to check the container name.
+
+On any other Docker host: `docker compose --env-file .env -f docker-compose.yml [-f docker-compose.grafana.yml] up -d`.
 
 ## Configuration
 

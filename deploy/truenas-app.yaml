@@ -1,0 +1,7 @@
+# Paste into TrueNAS: Apps -> Discover Apps -> ⋮ -> Install via YAML (app name: homecoach).
+# Replace "tank" with your pool. Remove the grafana line if you don't want Grafana.
+include:
+  - path:
+      - /mnt/tank/apps/homecoach/src/docker-compose.yml
+      - /mnt/tank/apps/homecoach/src/docker-compose.grafana.yml
+    env_file: /mnt/tank/apps/homecoach/.env

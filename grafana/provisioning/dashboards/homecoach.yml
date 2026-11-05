@@ -3,4 +3,4 @@ providers:
   - name: homecoach
     folder: homecoach
     type: file
-    options: { path: /var/lib/grafana/dashboards }
+    options: { path: /etc/grafana/dashboards }
