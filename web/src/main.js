@@ -4,6 +4,8 @@ import { timeChart, scatter, parse, fInt, f1, fDay, color, css } from './charts.
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $('#view');
+// Render a page; skips null/false parts (conditional sections) instead of printing them as text.
+const show = (...parts) => view.replaceChildren(...parts.flat().filter((x) => x != null && x !== false));
 const api = async (path, opts) => {
   const r = await fetch(`/api${path}`, { headers: { 'content-type': 'application/json' }, ...opts });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
@@ -95,7 +97,7 @@ async function today() {
   const zc = zoneColor(r.zone);
   const advice = { High: 'You’re well recovered — a good day for the key session.', Moderate: 'Recovered enough to train as planned.',
     Low: 'Some strain showing — keep today easy or shorten the session.', Poor: 'Your body is asking for rest — easy movement only today.' }[r.zone] || '';
-  view.replaceChildren(
+  show(
     h('h1', {}, `Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 19 ? 'afternoon' : 'evening'}, ${p.athlete_name}`),
     h('p', { class: 'lede' }, advice),
     h('div', { class: 'hero' },
@@ -159,7 +161,7 @@ async function overview() {
   const q = `?days=${state.days}`;
   const [weekly, sum] = await Promise.all([load('weekly' + q, '/weekly' + q), load('sum' + q, '/summary' + q)]);
   const boxes = { steps: chartBox(160), run: chartBox(160), train: chartBox(160), sleep: chartBox(160) };
-  view.replaceChildren(
+  show(
     h('div', { class: 'row', style: 'justify-content:space-between' }, h('h1', {}, 'Overview'), periodSeg(overview)),
     h('p', { class: 'lede' }, `You averaged ${sum.avg_steps ? fInt(Math.round(sum.avg_steps)) : '—'} steps a day, hit 10,000 on ${sum.days_10k} days, ran ${sum.run_km} km in ${sum.runs} runs and slept ${sum.avg_sleep_h ?? '—'} hours a night.`),
     h('div', { class: 'grid four' },
@@ -243,7 +245,7 @@ async function plan() {
     : `${p.athlete_name}, no race yet — this keeps your fitness ticking over with one quality session a week.`;
   const list = week === 'this' ? p.this_week.sessions : p.next_week;
   const roadBox = chartBox(260), tableBox = h('div', { class: 'tablebox' });
-  view.replaceChildren(
+  show(
     h('h1', {}, 'Training plan'),
     h('p', { class: 'lede' }, head, ' ', `Readiness: ${p.readiness.status.toLowerCase()} (${p.readiness.reasons.join('; ')}).`),
     h('div', { class: 'row' }, (() => {
@@ -352,7 +354,7 @@ async function races() {
     if (opt) form.distance_km.value = opt.value; else form.distance_km.append(h('option', { value: r.distance_km, selected: '' }, `${r.distance_km} km`));
     form.scrollIntoView({ behavior: 'smooth' });
   };
-  view.replaceChildren(
+  show(
     h('h1', {}, 'Races'),
     h('p', { class: 'lede' }, 'Your training plan is built around these. A = main race (full build and taper), B = tune-up (mini-taper, easy days after), C = training race (replaces that week’s hard session).'),
     assistantCard(list, status),
@@ -377,7 +379,7 @@ async function trends() {
   const runs = acts.filter((a) => a.type === 'Run' && a.km && a.pace_s).map((a) => ({ ...a, eff: a.avg_hr ? +(a.km * 1000 / (a.duration_s / 60) / a.avg_hr).toFixed(2) : null }));
   const daysRows = daily.map((d, i, arr) => ({ ...d, date: d.day, steps_7d: Math.round(d3.mean(arr.slice(Math.max(0, i - 6), i + 1), (x) => x.steps || 0)) }));
   const boxes = { pmc: chartBox(280), km: chartBox(220), types: chartBox(220), steps: chartBox(240), pace: chartBox(260), eff: chartBox(220), load: chartBox(220), ratio: chartBox(170), actcal: chartBox(120), bytype: chartBox(120), stepcal: chartBox(120), weekday: chartBox(200), kcal: chartBox(220) };
-  view.replaceChildren(
+  show(
     h('div', { class: 'row', style: 'justify-content:space-between' }, h('h1', {}, 'Trends'), periodSeg(trends)),
     h('div', { class: 'grid tiles' },
       tile('Running', sum.run_km, 'km', `${sum.runs} runs`), tile('Training', sum.train_h, 'h', `${sum.sessions} sessions`),
@@ -458,7 +460,7 @@ async function recovery() {
   const hmin = (m) => (m == null ? '—' : `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, '0')}m`);
   const clock = (v) => { const x = ((v % 24) + 24) % 24; return `${String(Math.floor(x)).padStart(2, '0')}:${String(Math.round((x % 1) * 60)).padStart(2, '0')}`; };
   const boxes = { sleep: chartBox(260), hrv: chartBox(220), hr: chartBox(220), stress: chartBox(200), score: chartBox(200), bed: chartBox(220) };
-  view.replaceChildren(
+  show(
     h('div', { class: 'row', style: 'justify-content:space-between' }, h('h1', {}, 'Recovery'), periodSeg(recovery)),
     card('Sleep each night', 'Time in each stage, by the day you woke up.', [h('div', { class: 'legend' }, [['Deep', color(4)], ['Light', color(5)], ['REM', color(6)], ['Awake', css('--grey')]].map(([n, c]) => h('span', {}, h('span', { class: 'sw', style: `background:${c}` }), n))), boxes.sleep]),
     h('div', { style: 'height:16px' }),
@@ -490,8 +492,8 @@ const pages = { today, overview, plan, races, trends, recovery };
 async function route() {
   const name = location.hash.slice(1) || 'today';
   document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === `#${name}`));
-  view.replaceChildren(h('div', { class: 'empty' }, 'Loading…'));
-  try { await (pages[name] || today)(); } catch (e) { view.replaceChildren(h('div', { class: 'empty error' }, `Couldn’t load: ${e.message}`)); }
+  show(h('div', { class: 'empty' }, 'Loading…'));
+  try { await (pages[name] || today)(); } catch (e) { show(h('div', { class: 'empty error' }, `Couldn’t load: ${e.message}`)); }
 }
 async function syncStatus() {
   try {
