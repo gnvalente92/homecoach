@@ -29,7 +29,9 @@ doing. It's built for TrueNAS SCALE and runs on any Docker host. Data is stored 
 - **Grafana** (optional), pointed at the same database for your own analysis.
 
 Pages load instantly because they read from the local database. A collector keeps it up to date every 10 minutes, and
-**↻ Full resync** (top right) re-reads your whole history and refreshes the plan and race outlooks on demand.
+**↻ Full resync** (top right) re-reads your whole history, rebuilds the plan and runs a fresh coach review and race
+outlooks when AI is enabled. A successful review replaces pending recommendations; accepted changes and check-ins remain.
+If the model fails, previous recommendations remain and the completion message reports which refresh failed.
 
 ## Screenshots
 

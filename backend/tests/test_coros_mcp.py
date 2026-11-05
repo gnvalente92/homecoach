@@ -397,9 +397,11 @@ def test_first_mcp_sync_is_full_even_after_the_web_api(monkeypatch):
 
 def test_resync_endpoint(client, monkeypatch):
     import threading
+    from contextlib import contextmanager
 
     import homecoach.collector.main as collector
 
+    monkeypatch.setattr("homecoach.db.session_scope", contextmanager(api.app.dependency_overrides[api.get_session]))
     gate = threading.Event()
     monkeypatch.setattr(collector, "run_once", lambda full: gate.wait(5) and {"mode": "full", "activities_seen": 12, "days": 700})
     r = client.post("/api/resync")

@@ -588,15 +588,16 @@ async function resyncWatch() {
   state.resyncSeen = false;
   const s = st.stats || {};
   resetCache(); syncStatus(); route();
-  el.replaceChildren(h('div', { class: `banner${st.error ? ' bad' : ''}` },
-    h('div', {}, h('b', {}, st.error ? 'Full resync failed' : 'Full resync finished'),
+  const partial = Object.values(st.stages || {}).includes('failed');
+  el.replaceChildren(h('div', { class: `banner${st.error || partial ? ' bad' : ''}` },
+    h('div', {}, h('b', {}, st.error ? 'Full resync failed' : partial ? 'Full resync finished with issues' : 'Full resync finished'),
       h('div', { class: 'note', style: 'margin:2px 0 0' }, st.error ? st.error
-        : st.stats ? `${s.activities_seen ?? 0} activities (${s.activities_new ?? 0} new) and ${s.days ?? 0} days of health data. Plan and race outlooks are up to date.`
-          : 'Nothing to sync from: check the data source in .env.')),
+        : `${st.stats ? `${s.activities_seen ?? 0} activities (${s.activities_new ?? 0} new) and ${s.days ?? 0} days of health data.` : 'FIT inbox checked; no provider data synced.'} Training plan rebuilt.${st.stages?.coach === 'completed' ? ` Coach review complete: ${st.coach_suggestions} new recommendation(s).` : ''}`),
+      (st.warnings || []).map((warning) => h('p', { class: 'note' }, warning))),
     h('button', { class: 'link', onclick: () => el.replaceChildren() }, 'Dismiss')));
 }
 $('#resync').addEventListener('click', async () => {
-  if (!confirm('Run a full resync?\n\nThis re-reads your whole history from COROS (about 2 years), then refreshes your training plan and race outlooks. It takes a few minutes. Nothing is deleted.')) return;
+  if (!confirm('Run a full resync?\n\nThis re-reads your history, rebuilds the training plan and runs a fresh coach review and race outlooks when AI is enabled. Pending recommendations are replaced after a successful review; accepted changes and check-ins are kept. It can take a few minutes.')) return;
   try { await api('/resync', { method: 'POST' }); state.resyncSeen = true; resyncWatch(); }
   catch (e) { $('#notice').replaceChildren(h('div', { class: 'banner bad' }, h('div', {}, h('b', {}, 'Couldn’t start the resync'), h('div', { class: 'note' }, e.message)))); }
 });

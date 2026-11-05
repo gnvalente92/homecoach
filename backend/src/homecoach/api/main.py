@@ -162,13 +162,33 @@ def _resync_run() -> None:
     from homecoach.db import session_scope
 
     try:
+        _resync.update(stages={k: "pending" for k in ("sync", "plan", "coach", "outlooks")}, warnings=[])
         _resync.update(step="Re-reading your whole history from COROS")
+        _resync["stages"]["sync"] = "running"
         stats = run_once(full=True)
         if stats and stats.get("mode") == "skipped":
             raise RuntimeError("Another sync is running; wait for it to finish before requesting a full resync.")
         _resync["stats"] = stats
+        _resync["stages"]["sync"] = "completed"
+        _resync.update(step="Rebuilding the training plan")
+        _resync["stages"]["plan"] = "running"
+        with session_scope() as db:
+            compute_plan(db)
+        _resync["stages"]["plan"] = "completed"
         s = get_settings()
         if llm.enabled(s):
+            _resync.update(step="Reviewing the updated plan and refreshing coach recommendations")
+            _resync["stages"]["coach"] = "running"
+            try:
+                review = run_review()
+                _resync["coach_suggestions"] = len(review["suggestions"])
+                _resync["stages"]["coach"] = "completed"
+            except Exception:
+                log.exception("coach refresh during full resync failed")
+                _resync["stages"]["coach"] = "failed"
+                _resync["warnings"].append("Coach recommendations could not be refreshed; previous suggestions were retained.")
+            _resync["stages"]["outlooks"] = "running"
+            failed_outlooks = 0
             with session_scope() as db:
                 races = [r for r in db.scalars(select(Race).where(Race.day >= today())) if r.goal_time_s]
                 for i, r in enumerate(races, 1):
@@ -177,11 +197,26 @@ def _resync_run() -> None:
                         outlook.interpret(s, db, r, today(), force=True)
                         db.commit()
                     except Exception as e:  # one race failing shouldn't stop the rest
+                        db.rollback()
+                        failed_outlooks += 1
                         log.warning("race outlook for %s failed: %s", r.name, e)
+            _resync["stages"]["outlooks"] = "failed" if failed_outlooks else "completed"
+            if failed_outlooks:
+                _resync["warnings"].append(f"{failed_outlooks} race outlook(s) could not be refreshed.")
+        else:
+            _resync["stages"].update(coach="skipped", outlooks="skipped")
+            _resync["warnings"].append(
+                "AI is disabled: the rule-based plan was rebuilt; coach recommendations and AI outlooks were skipped."
+            )
         _resync.update(error=None)
     except Exception as e:
         log.exception("full resync failed")
         _resync.update(error=str(e))
+        for stage, status in _resync.get("stages", {}).items():
+            if status == "running":
+                _resync["stages"][stage] = "failed"
+            elif status == "pending":
+                _resync["stages"][stage] = "skipped"
     finally:
         _resync.update(running=False, step=None, finished_at=datetime.now().isoformat(timespec="seconds"))
         _resync_lock.release()
@@ -585,11 +620,19 @@ def run_review(source: str = "review") -> dict:
     """Weekly review (also used by the collector). Uses its own DB session."""
     from homecoach import coach
     from homecoach.db import session_scope
+    from homecoach.locking import execution_lock
 
-    with _review_lock, session_scope() as db:
-        return coach.run(
+    with _review_lock, execution_lock(get_settings().data_dir / ".coach-review.lock") as acquired, session_scope() as db:
+        if not acquired:
+            raise RuntimeError("another coach review is running")
+        pending = list(db.scalars(select(CoachSuggestion.id).where(CoachSuggestion.status == "pending")))
+        result = coach.run(
             get_settings(), db, jsonable(compute_plan(db)), today(), [{"role": "user", "content": coach.REVIEW_PROMPT}], source
         )
+        # A failed model call rolls back this transaction and retains the old recommendations.
+        if pending:
+            db.execute(delete(CoachSuggestion).where(CoachSuggestion.id.in_(pending), CoachSuggestion.status == "pending"))
+        return result
 
 
 @app.get("/api/coach")
