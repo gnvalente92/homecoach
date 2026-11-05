@@ -15,14 +15,18 @@ from homecoach.providers import get_provider
 log = logging.getLogger("homecoach.collector")
 
 
-def run_once(full: bool = False) -> None:
+BACKFILL_KEY = "coros-mcp-backfill"
+
+
+def run_once(full: bool = False) -> dict | None:
+    """One sync. Returns its stats (None when there's nothing to sync from)."""
     settings = get_settings()
     with session_scope() as s:
         n = import_fit_inbox(s, settings)
         if n:
             log.info("imported %d FIT files from inbox", n)
     if settings.provider == "none":
-        return
+        return None
     with session_scope() as s:
         if settings.provider == "coros-mcp":
             from homecoach import coros_auth
@@ -32,16 +36,24 @@ def run_once(full: bool = False) -> None:
                 provider = get_provider(settings, s)
             except AuthRequired as e:
                 log.warning("%s", e)
-                return
+                return None
+            from homecoach.collector.sync import get_state, set_state
+
+            # the first sync through the official connection re-reads everything, even if the old web-API
+            # provider already synced (it shares the provider name, so its "last sync" would make this incremental)
+            first = not get_state(s, BACKFILL_KEY)
             try:
-                stats = sync_provider(s, provider, settings, full=full)
+                stats = sync_provider(s, provider, settings, full=full or first)
+                if full or first:
+                    set_state(s, BACKFILL_KEY, {"done": True})
             finally:  # keep refreshed tokens even if the sync failed half way
                 st = provider.s.state
                 if st.pop("changed", False):
                     coros_auth.save(s, st)
         else:
             stats = sync_provider(s, get_provider(settings), settings, full=full)
-    log.info("sync %s done: %s", stats.pop("mode", "incremental"), stats)
+    log.info("sync %s done: %s", stats.get("mode", "incremental"), stats)
+    return stats
 
 
 def _heartbeat() -> None:

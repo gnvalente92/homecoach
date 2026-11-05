@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import base64
 import html
+import logging
 import secrets
 import threading
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 import httpx
@@ -33,6 +34,8 @@ from homecoach.models import (
     SyncState,
 )
 from homecoach.plan import engine as E
+
+log = logging.getLogger(__name__)
 
 app = FastAPI(title="homecoach", version=__version__)
 Db = Depends(get_session)
@@ -141,6 +144,58 @@ def config(db: Session = Db) -> dict:
     # sync progress only: the COROS connection (tokens) lives in the same table and must never leave the server
     states = {st.key: st.value for st in db.scalars(select(SyncState).where(SyncState.key != COROS_AUTH_KEY))}
     return {"athlete_name": s.athlete_name, "timezone": s.timezone, "provider": s.provider, "sync": states, "today": today()}
+
+
+# ---- full resync (button in the header) ----------------------------------------------------------
+
+_resync: dict = {"running": False}
+_resync_lock = threading.Lock()
+
+
+def _resync_run() -> None:
+    from homecoach import llm, outlook
+    from homecoach.collector.main import run_once
+    from homecoach.db import session_scope
+
+    try:
+        _resync.update(step="Re-reading your whole history from COROS")
+        stats = run_once(full=True)
+        _resync["stats"] = stats
+        s = get_settings()
+        if llm.enabled(s):
+            with session_scope() as db:
+                races = [r for r in db.scalars(select(Race).where(Race.day >= today())) if r.goal_time_s]
+                for i, r in enumerate(races, 1):
+                    _resync.update(step=f"Updating the race outlook ({i}/{len(races)}): {r.name}")
+                    try:
+                        outlook.interpret(s, db, r, today(), force=True)
+                        db.commit()
+                    except Exception as e:  # one race failing shouldn't stop the rest
+                        log.warning("race outlook for %s failed: %s", r.name, e)
+        _resync.update(error=None)
+    except Exception as e:
+        log.exception("full resync failed")
+        _resync.update(error=str(e))
+    finally:
+        _resync.update(running=False, step=None, finished_at=datetime.now().isoformat(timespec="seconds"))
+        _resync_lock.release()
+
+
+@app.post("/api/resync", status_code=202)
+def resync() -> dict:
+    """Re-read everything from the provider, then refresh race outlooks. The plan is computed from the data on
+    every request, so it updates by itself once the data is in."""
+    if not _resync_lock.acquire(blocking=False):
+        return {**_resync, "already_running": True}
+    _resync.clear()
+    _resync.update(running=True, started_at=datetime.now().isoformat(timespec="seconds"), step="Starting", error=None)
+    threading.Thread(target=_resync_run, daemon=True).start()
+    return dict(_resync)
+
+
+@app.get("/api/resync")
+def resync_status() -> dict:
+    return dict(_resync)
 
 
 @app.post("/api/sync")

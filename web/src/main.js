@@ -561,6 +561,37 @@ async function corosBanner() {
     err));
 }
 
+// ---- full resync ----
+async function resyncWatch() {
+  const btn = $('#resync'), el = $('#notice');
+  let st;
+  try { st = await api('/resync'); } catch { return; }
+  btn.disabled = !!st.running;
+  btn.textContent = st.running ? '↻ Resyncing…' : '↻ Full resync';
+  if (st.running) {
+    el.replaceChildren(h('div', { class: 'banner' }, h('div', {}, h('b', {}, 'Full resync running'),
+      h('div', { class: 'note', style: 'margin:2px 0 0' }, `${st.step || 'Working'}… This can take a few minutes; you can keep using homecoach.`))));
+    setTimeout(resyncWatch, 5000);
+    state.resyncSeen = true;
+    return;
+  }
+  if (!state.resyncSeen || !st.finished_at) return;  // only report a resync started in this tab
+  state.resyncSeen = false;
+  const s = st.stats || {};
+  resetCache(); syncStatus(); route();
+  el.replaceChildren(h('div', { class: `banner${st.error ? ' bad' : ''}` },
+    h('div', {}, h('b', {}, st.error ? 'Full resync failed' : 'Full resync finished'),
+      h('div', { class: 'note', style: 'margin:2px 0 0' }, st.error ? st.error
+        : st.stats ? `${s.activities_seen ?? 0} activities (${s.activities_new ?? 0} new) and ${s.days ?? 0} days of health data. Plan and race outlooks are up to date.`
+          : 'Nothing to sync from: check the data source in .env.')),
+    h('button', { class: 'link', onclick: () => el.replaceChildren() }, 'Dismiss')));
+}
+$('#resync').addEventListener('click', async () => {
+  if (!confirm('Run a full resync?\n\nThis re-reads your whole history from COROS (about 2 years), then refreshes your training plan and race outlooks. It takes a few minutes. Nothing is deleted.')) return;
+  try { await api('/resync', { method: 'POST' }); state.resyncSeen = true; resyncWatch(); }
+  catch (e) { $('#notice').replaceChildren(h('div', { class: 'banner bad' }, h('div', {}, h('b', {}, 'Couldn’t start the resync'), h('div', { class: 'note' }, e.message)))); }
+});
+
 // ---- router -----------------------------------------------------------------------------------
 
 const pages = { today, overview, plan, races, trends, recovery };
@@ -589,4 +620,4 @@ $('#theme').addEventListener('click', () => {
 window.addEventListener('hashchange', route);
 let resizeT; window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(route, 250); });
 setInterval(() => { resetCache(); syncStatus(); if ((location.hash.slice(1) || 'today') !== 'races') route(); }, 10 * 60 * 1000);
-route(); corosBanner().then(syncStatus);
+route(); corosBanner().then(syncStatus); resyncWatch();

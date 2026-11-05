@@ -138,7 +138,9 @@ details summary { cursor: pointer; }
 .outlook .coach-note { margin-top: 4px; }
 
 /* COROS connect banner */
-#banner:empty { display: none; }
+#banner:empty, #notice:empty { display: none; }
+#notice { padding: 0 20px; }
+.banner.bad { border-left-color: var(--bad); }
 .banner { max-width: 1140px; margin: 16px auto 0; padding: 14px 18px; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between;
   background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius); }
 .banner form, .banner .error { flex-basis: 100%; }

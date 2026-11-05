@@ -32,6 +32,9 @@ TOOLS = {
 }
 
 
+WINDOW = 90  # days per request for date-range tools
+
+
 # ---- small helpers -------------------------------------------------------------------------------
 
 
@@ -219,11 +222,21 @@ class CorosMCPProvider:
         return a
 
     def _text(self, kind: str, start: date, end: date) -> str:
+        """The report text for a date range. Date-range tools are called in WINDOW-day pieces (long ranges
+        can be refused or truncated); 'last N days' tools are called once (they count back from today)."""
         tool = self._tool(kind)
         if not tool:
             log.info("COROS MCP has no %s tool; skipping", kind)
             return ""
-        return self.s.call(tool, self._args(tool, start, end))
+        props = (self.s.tools.get(tool, {}).get("inputSchema") or {}).get("properties", {})
+        if "startDate" not in props or (end - start).days < WINDOW:
+            return self.s.call(tool, self._args(tool, start, end))
+        parts, a = [], start
+        while a <= end:
+            b = min(end, a + timedelta(days=WINDOW - 1))
+            parts.append(self.s.call(tool, self._args(tool, a, b)))
+            a = b + timedelta(days=1)
+        return "\n\n".join(parts)
 
     def fetch_activities(self, start: date, end: date) -> list[ActivityRecord]:
         return parse_activities(self._text("activities", start, end), self.tz)
