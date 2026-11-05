@@ -235,7 +235,10 @@ def mock_coros(state):
             return httpx.Response(200, json={"jsonrpc": "2.0", "id": msg["id"], "result": {"tools": tools}})
         name, args = msg["params"]["name"], msg["params"]["arguments"]
         state.setdefault("calls", []).append((name, args))
-        payload = {"jsonrpc": "2.0", "id": msg["id"], "result": {"content": [{"type": "text", "text": TOOL_TEXT[name]}]}}
+        text = TOOL_TEXT[name]
+        if "startDate" in args and not (args["startDate"] <= "20261103" and args["endDate"] >= "20261101"):
+            text = "No records in this period."  # date-range tools only return what's inside the window
+        payload = {"jsonrpc": "2.0", "id": msg["id"], "result": {"content": [{"type": "text", "text": text}]}}
         sse = f"event: message\ndata: {json.dumps(payload)}\n\n"  # answer as an event stream
         return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
 
@@ -336,3 +339,72 @@ def test_config_never_exposes_coros_tokens(client):
     db.commit()
     body = client.get("/api/config").text
     assert "secret" not in body and coros_auth.KEY not in body and "2026-11-05T15:40" in body
+
+
+def test_long_ranges_are_fetched_in_windows():
+    calls = []
+
+    class FakeSession:
+        tools = {
+            "querySportRecords": {"inputSchema": {"properties": {"startDate": {}, "endDate": {}}}},
+            "queryDailyHealthData": {"inputSchema": {"properties": {"days": {}}}},
+        }
+        state: dict = {}
+
+        def call(self, name, args):
+            calls.append((name, args))
+            return ""
+
+    p = P.CorosMCPProvider(FakeSession())
+    p.fetch_activities(date(2024, 11, 5), date(2026, 11, 5))
+    ranges = [(a["startDate"], a["endDate"]) for n, a in calls if n == "querySportRecords"]
+    assert len(ranges) == 9 and ranges[0] == ("20241105", "20250202") and ranges[-1][1] == "20261105"
+    p.fetch_daily(date(2024, 11, 5), date(2026, 11, 5))
+    assert [a for n, a in calls if n == "queryDailyHealthData"] == [{"days": 365}]  # 'last N days' tools: one call
+
+
+def test_first_mcp_sync_is_full_even_after_the_web_api(monkeypatch):
+    from contextlib import contextmanager
+
+    from homecoach.collector import main as collector
+
+    store: dict = {}
+    modes = []
+
+    @contextmanager
+    def fake_scope():
+        yield None
+
+    s = api.get_settings()
+    monkeypatch.setattr(s, "provider", "coros-mcp")
+    monkeypatch.setattr(collector, "session_scope", fake_scope)
+    monkeypatch.setattr(collector, "import_fit_inbox", lambda *_: 0)
+    monkeypatch.setattr(collector, "get_provider", lambda *_: type("P", (), {"s": type("S", (), {"state": {}})()})())
+    monkeypatch.setattr(collector, "sync_provider", lambda db, p, st, full: modes.append(full) or {"mode": "x"})
+    import homecoach.collector.sync as sync
+
+    monkeypatch.setattr(sync, "get_state", lambda db, k: store.get(k, {}))
+    monkeypatch.setattr(sync, "set_state", lambda db, k, v: store.__setitem__(k, v))
+    collector.run_once()
+    collector.run_once()
+    collector.run_once(full=True)
+    assert modes == [True, False, True]
+
+
+def test_resync_endpoint(client, monkeypatch):
+    import threading
+
+    import homecoach.collector.main as collector
+
+    gate = threading.Event()
+    monkeypatch.setattr(collector, "run_once", lambda full: gate.wait(5) and {"mode": "full", "activities_seen": 12, "days": 700})
+    r = client.post("/api/resync")
+    assert r.status_code == 202 and r.json()["running"] is True
+    assert client.post("/api/resync").json()["already_running"] is True  # one at a time
+    gate.set()
+    for _ in range(50):
+        st = client.get("/api/resync").json()
+        if not st["running"]:
+            break
+        threading.Event().wait(0.05)
+    assert st["running"] is False and st["stats"]["days"] == 700 and st["error"] is None and st["finished_at"]
