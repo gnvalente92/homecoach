@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5", "respx>=0.21"]
+dev = ["pytest>=8", "ruff>=0.5", "respx>=0.21", "httpx2>=2.16"]  # httpx2: what starlette.testclient uses
 
 [project.scripts]
 homecoach = "homecoach.cli:main"
