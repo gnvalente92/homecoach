@@ -127,7 +127,7 @@ class CoachSuggestion(Base):
     duration_min: Mapped[int | None] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(10), default="chat")  # chat | review
-    status: Mapped[str] = mapped_column(String(10), default="pending", index=True)  # pending | accepted | dismissed
+    status: Mapped[str] = mapped_column(String(10), default="pending", index=True)  # pending | accepted | dismissed | superseded
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

@@ -166,3 +166,5 @@ details.manual { margin-top: 12px; } details.manual form { margin-top: 10px; }
 .goal-form label.check, label.check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--fg); align-self: end; padding-bottom: 9px; }
 label.check input { width: auto; padding: 0; margin: 0; }
 .nutri-today .contribs { gap: 10px; }
+.session .undo { margin-top: 8px; padding: 0; font-size: 12px; }
+.proposal.superseded { border-left-color: var(--grey); opacity: .55; }

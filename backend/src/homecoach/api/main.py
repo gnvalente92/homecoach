@@ -717,12 +717,25 @@ def set_suggestion(sid: int, body: SuggestionStatus, db: Session = Db) -> dict:
         b = p["baseline"]
         if not E.monday(today()) <= x.day < b.next_monday + timedelta(days=7):
             raise HTTPException(409, "suggestion is outside this week and next week; request a new review")
-        week = p["this_week"]["sessions"] if x.day < b.next_monday else p["next_week"]
         target = p["this_week"]["target_km"] if x.day < b.next_monday else p["next_week_target_km"]
-        a = E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min)
-        why = E.check_adjustment(a, week, target, b.longest_km, today())
+        a = E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min, id=x.id)
+        # check against the day as it would be without the older changes this one replaces
+        same_day = {
+            o.id: _family(o)
+            for o in db.scalars(select(CoachSuggestion).where(CoachSuggestion.status == "accepted", CoachSuggestion.day == x.day))
+        }
+        base = E.apply_adjustments(
+            p["rule_this_week"] if x.day < b.next_monday else p["rule_next_week"],
+            [
+                o
+                for o in accepted_adjustments(db, E.monday(today()))
+                if o.id != x.id and not (o.id is not None and same_day.get(o.id, set()) & _family(x))
+            ],
+        )
+        why = E.check_adjustment(a, base, target, b.longest_km, today())
         if why:
             raise HTTPException(409, why)
+        supersede_older(db, x)
     x.status = body.status
     return jsonable(coach.suggestion_out(x))
 
@@ -740,7 +753,8 @@ def delete_checkin(cid: int, db: Session = Db) -> None:
 
 @app.get("/api/plan")
 def plan(db: Session = Db) -> dict:
-    return jsonable(compute_plan(db))
+    p = compute_plan(db)
+    return jsonable({k: v for k, v in p.items() if not k.startswith("rule_")})
 
 
 def accepted_adjustments(db: Session, start: date) -> list[E.Adjustment]:
@@ -749,7 +763,36 @@ def accepted_adjustments(db: Session, start: date) -> list[E.Adjustment]:
         .where(CoachSuggestion.status == "accepted", CoachSuggestion.day >= start)
         .order_by(CoachSuggestion.created_at, CoachSuggestion.id)
     )
-    return [E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min) for x in rows]
+    return [
+        E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min, id=x.id)
+        for x in rows
+    ]
+
+
+RUN_ACTIONS = {"replace", "shorten", "skip", "move"}
+
+
+def _family(x: CoachSuggestion) -> set[str]:
+    """What a change touches on its day: the run, the gym session, or both (a run-for-gym swap)."""
+    if x.action == "replace" and (x.session or "").strip().lower() == "strength":
+        return {"run", "strength"}
+    return {"strength"} if x.action == "strength" else {"run"}
+
+
+def supersede_older(db: Session, x: CoachSuggestion) -> list[int]:
+    """A newly accepted change replaces older accepted changes to the same part of the same day,
+    instead of stacking on top of them (e.g. two different run changes for Friday)."""
+    older = db.scalars(
+        select(CoachSuggestion).where(
+            CoachSuggestion.status == "accepted", CoachSuggestion.day == x.day, CoachSuggestion.id != x.id
+        )
+    )
+    ids = []
+    for o in older:
+        if _family(o) & _family(x):
+            o.status = "superseded"
+            ids.append(o.id)
+    return ids
 
 
 def compute_plan(db: Session) -> dict:
@@ -765,6 +808,7 @@ def compute_plan(db: Session) -> dict:
     tw, done_km, target_km = E.this_week(runs, b, races, r, done=runs)
     nw = E.next_week(b, weeks, r)
     next_target = round(sum(x.km for x in nw if x.session != "Strength"), 1)
+    rule_tw, rule_nw = tw, nw  # before coach changes (used when checking a change that replaces older ones)
     adj = accepted_adjustments(db, E.monday(t))
     inactive = []
     for a in adj:
@@ -788,6 +832,8 @@ def compute_plan(db: Session) -> dict:
         "next_week": nw,
         "next_week_target_km": next_target,
         "inactive_suggestions": inactive,
+        "rule_this_week": rule_tw,
+        "rule_next_week": rule_nw,
         "race_plan": weeks,
         "road": E.road(runs, weeks, b),
         "shape": {**E.endurance_shape(runs, t, tr.distance_km), "race": tr.name} if tr else None,

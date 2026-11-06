@@ -141,6 +141,8 @@ def test_accepting_separate_suggestions_rechecks_combined_volume(client, monkeyp
             "this_week": {"sessions": [], "target_km": 0},
             "next_week": E.apply_adjustments(week, changes),
             "next_week_target_km": 30,
+            "rule_this_week": [],
+            "rule_next_week": week,
         }
 
     monkeypatch.setattr(api, "compute_plan", plan)
