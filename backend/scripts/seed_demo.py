@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from homecoach.collector.sync import upsert_activity, upsert_daily, upsert_fitness
 from homecoach.db import Base, get_engine, session_scope
-from homecoach.models import CheckIn, CoachNote, CoachSuggestion, Race, RaceInsight
+from homecoach.models import CheckIn, CoachNote, CoachSuggestion, FoodEntry, NutritionProfile, Race, RaceInsight
 from homecoach.providers.base import ActivityRecord, DailyRecord, FitnessRecord
 
 random.seed(7)
@@ -198,4 +198,26 @@ with session_scope() as s:
     from homecoach.collector.sync import set_state
 
     set_state(s, "provider:demo", {"last_sync": datetime.now().isoformat(), "last_full": datetime.now().isoformat()})
+
+    # nutrition: Alex's profile and what's been eaten so far today (all made up)
+    s.add(
+        NutritionProfile(
+            id=1,
+            weight_kg=68,
+            height_cm=176,
+            birth_date=date(1993, 5, 20),
+            sex="male",
+            goal="maintain",
+            protein_g_per_kg=1.8,
+            follow_provider=True,
+            source="demo",
+        )
+    )
+    for meal, name, qty, kcal, p, c, f, src in [
+        ("breakfast", "Porridge with banana", "60 g oats, 1 banana", 380, 12, 68, 7, "ai"),
+        ("breakfast", "Coffee with milk", "1 mug", 45, 3, 4, 2, "ai"),
+        ("lunch", "Chicken and rice bowl", "1 bowl", 640, 42, 78, 16, "ai"),
+        ("snack", "Greek yoghurt", "150 g", 110, 15, 6, 3, "manual"),
+    ]:
+        s.add(FoodEntry(day=today, meal=meal, name=name, quantity=qty, kcal=kcal, protein_g=p, carbs_g=c, fat_g=f, source=src))
 print("seeded")

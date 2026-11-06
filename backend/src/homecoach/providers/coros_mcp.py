@@ -29,6 +29,7 @@ TOOLS = {
     "load": ["queryTrainingLoadAssessment"],
     "fitness": ["queryFitnessAssessmentOverview"],
     "fit_urls": ["queryActivityFitFileDownloadUrls"],
+    "profile": ["queryUserInfo"],
 }
 
 
@@ -195,6 +196,20 @@ def parse_fitness(text: str, today: date) -> FitnessRecord | None:
     )
 
 
+def parse_profile(text: str) -> dict:
+    """Height, weight, birthday and sex from the user-info report (only fields that are present)."""
+    out: dict[str, Any] = {}
+    if (h := num(r"Height:\s*([\d.]+)\s*cm", text)) and 100 <= h <= 250:
+        out["height_cm"] = h
+    if (w := num(r"Weight:\s*([\d.]+)\s*kg", text)) and 25 <= w <= 300:
+        out["weight_kg"] = w
+    if b := re.search(r"Birthday:\s*(\d{4}-\d{2}-\d{2})", text):
+        out["birth_date"] = date.fromisoformat(b.group(1))
+    if g := re.search(r"Gender:\s*(Male|Female)", text, re.I):
+        out["sex"] = g.group(1).lower()
+    return out
+
+
 # ---- provider -----------------------------------------------------------------------------------
 
 
@@ -265,6 +280,11 @@ class CorosMCPProvider:
     def fetch_fitness(self) -> FitnessRecord | None:
         today = date.today()
         return parse_fitness(self._text("fitness", today - timedelta(days=7), today), today)
+
+    def fetch_profile(self) -> dict:
+        """Body data for nutrition targets (optional provider method)."""
+        today = date.today()
+        return parse_profile(self._text("profile", today, today))
 
     def download_fit(self, activity: ActivityRecord) -> bytes | None:
         return None  # FIT downloads via MCP are not wired up yet; activity summaries are complete without them

@@ -2,6 +2,7 @@ import './style.css';
 import * as d3 from 'd3';
 import { timeChart, scatter, parse, fInt, f1, fDay, color, css } from './charts.js';
 import { trainingPages } from './training.js';
+import { nutritionPages } from './nutrition.js';
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $('#view');
@@ -610,7 +611,7 @@ $('#resync').addEventListener('click', async () => {
 
 // ---- router -----------------------------------------------------------------------------------
 
-const pages = { today, overview, plan, races, trends, recovery, ...trainingPages({ api, h, show, card, resetCache, pace, hm }) };
+const pages = { today, overview, plan, races, trends, recovery, ...trainingPages({ api, h, show, card, resetCache, pace, hm }), ...nutritionPages({ api, h, show, card, resetCache }) };
 async function route() {
   const name = location.hash.slice(1) || 'today';
   document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === `#${name}`));

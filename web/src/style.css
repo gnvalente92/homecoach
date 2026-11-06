@@ -154,3 +154,15 @@ details summary { cursor: pointer; }
 .goal-cards { margin-bottom:16px; }
 .training-table { min-width:620px; }
 .training-table.months th:not(:first-child) { text-align: right; }
+
+/* nutrition */
+.load-pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 99px;
+  background: color-mix(in srgb, var(--lc) 22%, transparent); color: color-mix(in srgb, var(--lc) 75%, var(--fg)); }
+.macros-line { display: flex; gap: 10px; font-size: 13px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.fuel { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); display: grid; gap: 2px; }
+.meal { margin-bottom: 10px; } .meal .label { margin-bottom: 4px; }
+.food-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+details.manual { margin-top: 12px; } details.manual form { margin-top: 10px; }
+.goal-form label.check, label.check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--fg); align-self: end; padding-bottom: 9px; }
+label.check input { width: auto; padding: 0; margin: 0; }
+.nutri-today .contribs { gap: 10px; }

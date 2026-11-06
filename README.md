@@ -23,6 +23,10 @@ doing. It's built for TrueNAS SCALE and runs on any Docker host. Data is stored 
   recent run converted to the race distance, kilometres run at goal pace in the last 4 weeks and your endurance shape,
   with a verdict (*on track*, *within reach*, *stretch* or *ambitious*). The local AI can explain it in plain words and
   suggest two or three things to focus on.
+- **Nutrition**: calories, carbs, protein, fat and fluids for every day of this week and next, worked out from that day's
+  training. Carbs follow the load (rest day, easy run, key session, long run, carb loading before a half or marathon, race
+  day), protein stays steady and fat fills the rest. Tell the food chat (local AI) what you ate and it estimates it; nothing
+  is logged until you confirm. Your weight, height, birthday and sex come from COROS, or you enter them once.
 - **Overview, Trends and Recovery**: totals compared with the previous period, a fitness / fatigue / form chart, pace vs
   heart rate, running efficiency, activity and step calendars, sleep stages, HRV and resting HR against your baseline,
   and stress.
@@ -57,6 +61,10 @@ fixes and verification limits.
 | Recovery | Training plan |
 |---|---|
 | ![Sleep stages, HRV and resting HR against baselines](docs/screenshots/recovery.png) | ![This week's sessions and the coach panel](docs/screenshots/plan.png) |
+
+**Nutrition**
+
+![Daily nutrition targets from training, today's food log and the food chat](docs/screenshots/nutrition.png)
 
 **Am I on track?**
 
