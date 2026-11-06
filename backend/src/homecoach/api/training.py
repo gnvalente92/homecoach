@@ -184,6 +184,11 @@ def monthly(year: int | None = Query(None, ge=1971, le=9998), sport: Sport = "Al
     year = year or day.year
     if year > day.year:
         raise HTTPException(422, "year must not be in the future")
+    # Before the first recorded activity there is no data, which is not the same as a month of zero training.
+    first_query = select(func.min(Activity.local_date))
+    if sport != "All":
+        first_query = first_query.where(Activity.type == sport)
+    first = db.scalar(first_query)
     months = []
     for month in range(1, 13 if year < day.year else day.month + 1):
         start = date(year, month, 1)
@@ -201,8 +206,8 @@ def monthly(year: int | None = Query(None, ge=1971, le=9998), sport: Sport = "Al
                 "partial": current,
                 "previous_start": previous_start,
                 "previous_end": previous_end - timedelta(days=1),
-                "current": totals(db, start, end, sport),
-                "previous": totals(db, previous_start, previous_end, sport),
+                "current": totals(db, start, end, sport) if first and end > first else None,
+                "previous": totals(db, previous_start, previous_end, sport) if first and previous_end > first else None,
             }
         )
-    return {"year": year, "sport": sport, "months": months}
+    return {"year": year, "sport": sport, "first_activity": first, "months": months}

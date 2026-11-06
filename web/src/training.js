@@ -6,6 +6,10 @@ export function trainingPages({ api, h, show, card, resetCache, pace, hm }) {
     options.map(([key, label]) => h('option', { value: key, selected: key === value ? '' : null }, label)));
   const labelled = (text, field) => h('label', {}, h('span', {}, text), field);
   const number = (value) => Number(value.toFixed(2)).toLocaleString();
+  // 217.39 h -> "217 h 23 min"; 131.468 km -> "131.5 km"; one formatter per measure so every view reads the same
+  const hours = (h) => { const m = Math.round(h * 60); const hh = Math.floor(m / 60), mm = m % 60; return mm ? `${hh.toLocaleString()} h ${mm} min` : `${hh.toLocaleString()} h`; };
+  const km = (v) => `${Number(v.toFixed(1)).toLocaleString()} km`;
+  const amount = (metric, v) => (metric === 'duration_h' ? hours(v) : metric === 'distance_km' ? km(v) : `${v} ${v === 1 ? 'session' : 'sessions'}`);
   const feedback = () => h('p', { class: 'note error', role: 'status', 'aria-live': 'polite' });
   const asDate = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
@@ -28,11 +32,11 @@ export function trainingPages({ api, h, show, card, resetCache, pace, hm }) {
     h('button', { type: 'button', class: 'link', onclick: () => { editing = null; save.textContent = 'Add goal'; form.reset(); } }, 'Clear'));
     metric.addEventListener('change', () => { const whole = metric.value === 'sessions'; target.step = whole ? '1' : '0.01'; target.min = whole ? '1' : '0.01'; });
     const cards = items.map((goal) => {
-      const unit = metrics[goal.metric][1];
       return card(`${goal.sport === 'All' ? 'All sports' : goal.sport} · ${goal.period}`, `${asDate(goal.start)} – ${asDate(goal.end)}`,
-        [h('div', { class: 'big' }, `${number(goal.value)} / ${number(goal.target)}`, h('small', {}, ` ${unit}`)),
+        [h('div', { class: 'big' }, amount(goal.metric, goal.value), h('small', {}, ` of ${amount(goal.metric, goal.target)}`)),
           h('progress', { class: 'goal-progress', value: Math.min(100, goal.percent), max: 100, 'aria-label': `${goal.sport} ${goal.period} ${metrics[goal.metric][0]} progress` }),
-          h('p', { class: 'note' }, goal.complete ? `Goal reached · ${number(goal.percent)}%` : `${number(goal.remaining)} ${unit} remaining · ${goal.days_left} day(s) after today`),
+          h('p', { class: 'note' }, goal.complete ? `Goal reached · ${number(goal.percent)}%`
+            : `${amount(goal.metric, goal.remaining)} to go · ${goal.days_left === 0 ? 'last day today' : `${goal.days_left} ${goal.days_left === 1 ? 'day' : 'days'} left`}`),
           goal.missing_sessions ? h('p', { class: 'note' }, `${goal.missing_sessions} activity/activities have no recorded ${metrics[goal.metric][0].toLowerCase()}; progress may be incomplete.`) : null,
           h('div', { class: 'row' },
             h('button', { class: 'link', onclick: () => { editing = goal.id; period.value = goal.period; sport.value = goal.sport; metric.value = goal.metric; target.value = goal.target; metric.dispatchEvent(new Event('change')); save.textContent = 'Save goal'; target.focus(); } }, 'Edit'),
@@ -69,17 +73,20 @@ export function trainingPages({ api, h, show, card, resetCache, pace, hm }) {
     } }, labelled('Search', q), labelled('From', start), labelled('To', end), h('button', { class: 'primary', type: 'submit' }, 'Search'));
     const table = (headings, rows) => h('div', { class: 'tablebox' }, h('table', { class: 'training-table' },
       h('thead', {}, h('tr', {}, headings.map((text) => h('th', { scope: 'col' }, text)))), h('tbody', {}, rows)));
-    const monthTable = table(['Month', `Distance ${filters.year}`, `Time (${filters.year} / ${filters.year - 1})`, `Sessions (${filters.year} / ${filters.year - 1})`, `Distance ${filters.year - 1}`], monthly.months.map((month) =>
+    // every column reads "this year / last year"; "—" means no data yet (before your first activity), not zero
+    const both = (month, fmt) => h('td', { class: 'num' }, month.current ? fmt(month.current) : '—', h('span', { class: 'muted' }, ` / ${month.previous ? fmt(month.previous) : '—'}`));
+    const y = filters.year;
+    const monthTable = table(['Month', `Distance (${y} / ${y - 1})`, `Time (${y} / ${y - 1})`, `Sessions (${y} / ${y - 1})`], monthly.months.map((month) =>
       h('tr', {}, h('td', {}, `${new Date(`${month.month}T12:00:00`).toLocaleDateString(undefined, { month: 'short' })}${month.partial ? ' (so far)' : ''}`),
-        h('td', {}, `${number(month.current.distance_km)} km`), h('td', {}, `${number(month.current.duration_h)} / ${number(month.previous.duration_h)} h`),
-        h('td', {}, `${month.current.sessions} / ${month.previous.sessions}`), h('td', {}, `${number(month.previous.distance_km)} km`))));
+        both(month, (x) => km(x.distance_km)), both(month, (x) => hours(x.duration_h)), both(month, (x) => String(x.sessions)))));
+    monthTable.querySelector('table').classList.add('months');
     const rows = data.items.map((a) => h('tr', {}, h('td', {}, a.date), h('td', {}, a.type), h('td', {}, a.name),
       h('td', {}, a.km == null ? '—' : `${a.km} km`), h('td', {}, a.duration_s == null ? '—' : hm(a.duration_s)),
       h('td', {}, a.pace_s ? `${pace(a.pace_s)} /km` : '—'), h('td', {}, a.avg_hr ? `${a.avg_hr} bpm` : '—')));
     const refresh = async () => { try { await log(); } catch (err) { error.textContent = err.message; } };
     const pageButton = (label, next, disabled) => h('button', { class: 'link', disabled: disabled ? '' : null, onclick: () => { filters.offset = next; refresh(); } }, label);
     show(h('h1', {}, 'Training log'), h('p', { class: 'lede' }, 'Browse your recorded activities and compare calendar months with last year.'), historyControls,
-      card(`Monthly training · ${filters.year}`, 'Totals include the selected sport. The current month compares the same elapsed calendar days last year. Missing distance or duration contributes no value.', monthTable),
+      card(`Monthly training · ${filters.year}`, 'Each column shows this year / last year for the selected sport. The current month is compared with the same number of days last year. “—” means there is no data yet for that month.', monthTable),
       h('h2', {}, 'Activities'), search, error,
       data.total ? table(['Date', 'Sport', 'Activity', 'Distance', 'Time', 'Pace', 'Heart rate'], rows) : h('div', { class: 'card empty' }, 'No activities match these filters.'),
       h('div', { class: 'row' }, pageButton('Previous', Math.max(0, filters.offset - 50), filters.offset === 0),

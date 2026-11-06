@@ -131,3 +131,15 @@ def test_leap_day_comparison_has_valid_previous_year_end(history, monkeypatch):
     monkeypatch.setattr(training, "today", lambda: date(2024, 2, 29))
     february = history.get("/api/training/monthly?year=2024").json()["months"][-1]
     assert february["end"] == "2024-02-29" and february["previous_end"] == "2023-02-28"
+
+
+def test_months_before_the_first_activity_have_no_data_rather_than_zero(history):
+    result = history.get("/api/training/monthly?year=2026&sport=Run").json()
+    assert result["first_activity"] == "2025-11-03"
+    months = {m["month"][:7]: m for m in result["months"]}
+    assert months["2026-01"]["previous"] is None  # Jan 2025 is before any recorded activity
+    assert months["2026-01"]["current"]["distance_km"] == 0  # Jan 2026 is a real month without runs
+    assert months["2026-11"]["previous"]["distance_km"] == 6
+    assert all(
+        m["current"] is None and m["previous"] is None for m in history.get("/api/training/monthly?year=2024").json()["months"]
+    )
