@@ -163,3 +163,20 @@ def test_inline_tool_call_parsing():
 
 def test_checkin_model_roundtrip(client):
     assert CheckIn.__tablename__ == "checkins"
+
+
+def test_reasoning_is_kept_short_per_model_family(monkeypatch):
+    from homecoach import llm
+
+    s = api.get_settings()
+    for model, expect in [
+        ("gpt-oss:20b", "Reasoning: low\n\nSYS"),
+        ("qwen3:30b-a3b", "SYS\n\n/no_think"),
+        ("qwen3:30b-a3b-instruct-2507-q4_K_M", "SYS"),
+        ("qwen2.5:3b", "SYS"),
+    ]:
+        monkeypatch.setattr(s, "llm_model", model)
+        assert llm.tune_system(s, "SYS") == expect
+    monkeypatch.setattr(s, "llm_reasoning", "default")
+    monkeypatch.setattr(s, "llm_model", "gpt-oss:20b")
+    assert llm.tune_system(s, "SYS") == "SYS"
