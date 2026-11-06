@@ -100,7 +100,20 @@ def _check(r: httpx.Response) -> dict:
     return r.json()
 
 
+def tune_system(s: Settings, system: str) -> str:
+    """Keep reasoning models' thinking short (see Settings.llm_reasoning), using each family's own switch."""
+    model = s.llm_model.lower()
+    if s.llm_reasoning != "low":
+        return system
+    if model.startswith("gpt-oss"):
+        return "Reasoning: low\n\n" + system  # gpt-oss reads its reasoning effort from the system message
+    if model.startswith("qwen3") and "instruct" not in model:
+        return system + "\n\n/no_think"  # Qwen3's soft switch; the instruct-2507 variants never think
+    return system
+
+
 def _openai(s, http, system, messages, tools, by_name, max_rounds) -> Result:
+    system = tune_system(s, system)
     url = s.llm_base_url.rstrip("/") + "/chat/completions"
     headers = {"content-type": "application/json"}
     if s.llm_api_key:

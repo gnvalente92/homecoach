@@ -200,12 +200,26 @@ equipment and restrictions; recommendations remain pending until accepted.
    The `ollama-pull` container downloads the model (about 2 GB) once and then exits.
 4. Check everything works: `sudo docker exec ix-homecoach-web-1 homecoach llm-check`
 
-**Model choice** (CPU-only works; Ollama can't use Intel iGPUs):
+**Model choice** (CPU-only works; Ollama can't use Intel iGPUs). On a CPU, speed depends on how many parameters the
+model uses for each word, not how big it is. *Mixture-of-experts* (MoE) models keep a large model in RAM but use only a
+few billion parameters per word, so they trade memory for much better answers at about the speed of a small model:
 
-| Model | RAM | Speed on a 6-core desktop CPU | Notes |
+| Model | RAM | Used per word | Notes |
 |---|---|---|---|
-| `qwen2.5:3b` | ~2.5 GB | race lookup ~1–2 min | Default; reliable tool calling |
-| `qwen2.5:7b` | ~5.5 GB | ~2× slower | Better judgement for the coach |
+| `qwen2.5:3b` | ~2.5 GB | 3B | Default; fast, but makes the most mistakes |
+| `gpt-oss:20b` | ~14 GB | 3.6B (MoE) | Strong tool calling; good middle ground |
+| `qwen3:30b-a3b` | ~19 GB | 3B (MoE) | Best quality here |
+
+`HC_LLM_REASONING=low` (the default) keeps these models' "thinking" short, which saves a lot of CPU time per request.
+`HC_OLLAMA_CPUS` (default 4) caps the cores Ollama uses so the NAS stays responsive.
+
+On TrueNAS, the ZFS cache (ARC) uses most free RAM. It gives memory back when apps need it, but slowly, so a 14–19 GB model
+can make the first load slow or fail. Cap the ARC with an *Init/Shutdown script* (System → Advanced → Init/Shutdown
+Scripts, type *Command*, when *Post Init*), for example 8 GiB:
+
+```sh
+echo 8589934592 > /sys/module/zfs/parameters/zfs_arc_max
+```
 
 Any OpenAI-compatible server works (llama.cpp, LM Studio, vLLM, a remote box with a GPU): point `HC_LLM_BASE_URL` at it.
 `HC_LLM_PROVIDER=anthropic` with `HC_LLM_API_KEY` uses the Claude API instead, which is paid.
