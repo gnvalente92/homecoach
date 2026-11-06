@@ -101,6 +101,7 @@ def _run_once(full: bool = False) -> dict | None:
                     s.commit()
                 raise
             else:
+                sync_profile(s, provider)
                 st = provider.s.state
                 if st.pop("changed", False) and coros_auth.load(s).get("tokens") == original_tokens:
                     coros_auth.save(s, st)
@@ -108,6 +109,21 @@ def _run_once(full: bool = False) -> dict | None:
             stats = sync_provider(s, get_provider(settings), settings, full=full)
     log.info("sync %s done: %s", stats.get("mode", "incremental"), stats)
     return stats
+
+
+def sync_profile(s, provider) -> None:
+    """Body data (weight, height, birthday, sex) for nutrition targets; never fails the sync."""
+    fetch = getattr(provider, "fetch_profile", None)
+    if not fetch:
+        return
+    from homecoach import nutrition
+
+    try:
+        with s.begin_nested():
+            if nutrition.update_from_provider(s, fetch()):
+                log.info("nutrition profile updated from %s", provider.name)
+    except Exception as e:
+        log.warning("couldn't read the profile from %s: %s", provider.name, e)
 
 
 def _heartbeat() -> None:

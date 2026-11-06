@@ -28,6 +28,29 @@ sessions intact and is limited to two planned/recorded strength sessions per wee
 edited through suggestions and race-day additions are rejected. These are product constraints, not a validation of the
 exercise technique, resistance or its suitability for an individual.
 
+## Nutrition
+
+Targets are rule-based and follow common sports-nutrition guidance for endurance athletes (IOC and ACSM position
+statements). They are estimates for healthy adults in training, not medical or dietetic advice.
+
+- **Energy**: resting metabolism (Mifflin-St Jeor) × a daily-life factor from your usual steps (1.2–1.5, last 28 days)
+  + that day's training. Past days and today use the watch's calories. Planned runs are estimated at ~1 kcal per kg per km,
+  and other sessions use MET values. Walks are left out of training energy because the steps already count them.
+- **Carbohydrate** (g per kg of body weight): rest 3.5 · easy or strength 4.5–5 · key session or 60+ min 6 · long run or
+  90+ min 7 · race day 6–8 by distance. A and B races of 15 km or more get carb loading: 8 g/kg the day before a half,
+  10 g/kg for the two days before a marathon. Long sessions and races get fuelling notes (g of carbs per hour).
+- **Protein**: 1.8 g/kg every day by default, adjustable from 1.2 to 2.4, and 2.0 g/kg minimum while losing weight.
+- **Fat**: the rest of the energy, never below 0.8 g/kg. On carb-heavy days energy rises rather than fat dropping.
+- **Fluids**: 35 ml/kg plus about 0.6 L per hour of training.
+- **Weight goals**: "lose" takes 400 kcal off rest and easy days only, never off key, long, race or carb-loading days. It
+  never plans below resting metabolism × 1.2; carbs give way (down to 3 g/kg) before fat goes under its floor. "Gain" adds
+  300 kcal a day.
+
+The profile (weight, height, birth date, sex) comes from COROS's user info on each sync while "keep in sync with my watch"
+is on. Editing it by hand keeps your values. The food chat proposes entries for a meal with estimated macros; energy must
+match 4/4/9 kcal per gram of protein/carbs/fat within 25% (alcohol excepted), otherwise the model is asked to fix the
+numbers. Nothing is logged until you click Add, and entries can be removed or added by hand.
+
 ## Deferred features
 
 Matched routes, segment rankings, heatmaps, grade-adjusted pace and precise in-run best efforts need GPS or sample data,
@@ -39,5 +62,7 @@ and a separate implementation scope.
 
 Interactive API documentation remains at `/docs`. New endpoints are `GET/POST /api/goals`, `PUT/DELETE /api/goals/{id}`,
 `GET /api/training/log` and `GET /api/training/monthly`. Goals live in `training_goals`; coach strength durations live in
-`coach_suggestions.duration_min`. Migrations 0004 and 0005 add these assets without replacing existing data. Web startup
+`coach_suggestions.duration_min`. Migrations 0004 and 0005 add these assets without replacing existing data. Nutrition adds `GET /api/nutrition`,
+`PUT /api/nutrition/profile`, `GET/POST /api/nutrition/food`, `DELETE /api/nutrition/food/{id}` and
+`POST /api/nutrition/chat`, with the `nutrition_profile` and `food_entries` tables (migration 0006). Web startup
 runs migrations as before. Back up the database before upgrading and retain a compatible image tag for recovery.

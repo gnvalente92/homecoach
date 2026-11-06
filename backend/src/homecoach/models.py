@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from homecoach.db import Base
@@ -164,3 +164,38 @@ class TrainingGoal(Base):
     sport: Mapped[str] = mapped_column(String(20))
     metric: Mapped[str] = mapped_column(String(20))
     target: Mapped[float] = mapped_column(Float)
+
+
+class NutritionProfile(Base):
+    """Body data for nutrition targets (one row). Filled from the watch provider unless edited by hand."""
+
+    __tablename__ = "nutrition_profile"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    weight_kg: Mapped[float | None] = mapped_column(Float)
+    height_cm: Mapped[float | None] = mapped_column(Float)
+    birth_date: Mapped[date | None] = mapped_column(Date)
+    sex: Mapped[str | None] = mapped_column(String(10))
+    goal: Mapped[str] = mapped_column(String(10), default="maintain")
+    protein_g_per_kg: Mapped[float] = mapped_column(Float, default=1.8)
+    follow_provider: Mapped[bool] = mapped_column(Boolean, default=True)  # keep weight etc. in sync with the watch
+    source: Mapped[str | None] = mapped_column(String(20))  # coros | manual
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class FoodEntry(Base):
+    """Something eaten, with estimated energy and macros (from the food chat or typed in)."""
+
+    __tablename__ = "food_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    meal: Mapped[str] = mapped_column(String(10))  # breakfast | lunch | dinner | snack
+    name: Mapped[str] = mapped_column(String(120))
+    quantity: Mapped[str | None] = mapped_column(String(60))
+    kcal: Mapped[float] = mapped_column(Float)
+    protein_g: Mapped[float] = mapped_column(Float)
+    carbs_g: Mapped[float] = mapped_column(Float)
+    fat_g: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(10), default="manual")  # ai | manual
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
