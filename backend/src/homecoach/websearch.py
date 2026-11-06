@@ -25,7 +25,7 @@ def _public_address(url: httpx.URL) -> str:
     if url.port not in (None, 80, 443):
         raise ValueError("race pages must use a standard HTTP(S) port")
     try:
-        addresses = [row[4][0] for row in socket.getaddrinfo(url.host, url.port or 443, type=socket.SOCK_STREAM)]
+        addresses = [str(row[4][0]) for row in socket.getaddrinfo(url.host, url.port or 443, type=socket.SOCK_STREAM)]
     except OSError as e:
         raise ValueError("page hostname could not be resolved") from e
     if not addresses or any(not ipaddress.ip_address(addr).is_global for addr in addresses):
@@ -39,17 +39,15 @@ def search(s: Settings, query: str, n: int = 6, client: httpx.Client | None = No
     if r.status_code == 403:
         raise RuntimeError("SearXNG refused JSON output: enable 'json' under search.formats in its settings.yml")
     r.raise_for_status()
-    out = []
-    for item in (r.json().get("results") or [])[:n]:
-        out.append(
-            {
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "snippet": (item.get("content") or "")[:300],
-                "date": item.get("publishedDate") or "",
-            }
-        )
-    return out
+    return [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": (item.get("content") or "")[:300],
+            "date": item.get("publishedDate") or "",
+        }
+        for item in (r.json().get("results") or [])[:n]
+    ]
 
 
 def fetch_page(url: str, client: httpx.Client | None = None) -> str:
@@ -88,18 +86,18 @@ def fetch_page(url: str, client: httpx.Client | None = None) -> str:
 
 
 def _json_ld_events(raw: str) -> list[dict[str, Any]]:
-    out = []
+    out: list[dict[str, Any]] = []
     for block in re.findall(r"<script[^>]+application/ld\+json[^>]*>(.*?)</script>", raw, re.S | re.I):
         try:
             data = json.loads(block.strip())
         except json.JSONDecodeError:
             continue
         items = data if isinstance(data, list) else data.get("@graph", [data]) if isinstance(data, dict) else []
-        for it in items:
-            if isinstance(it, dict) and "Event" in str(it.get("@type", "")):
-                out.append(
-                    {k: it.get(k) for k in ("name", "startDate", "endDate", "location", "description", "url") if it.get(k)}
-                )
+        out.extend(
+            {k: it.get(k) for k in ("name", "startDate", "endDate", "location", "description", "url") if it.get(k)}
+            for it in items
+            if isinstance(it, dict) and "Event" in str(it.get("@type", ""))
+        )
     return out
 
 

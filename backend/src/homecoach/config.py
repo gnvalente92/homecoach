@@ -1,3 +1,5 @@
+"""Runtime configuration: every setting is an environment variable with the HC_ prefix (see .env.example)."""
+
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal

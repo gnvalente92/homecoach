@@ -36,11 +36,16 @@ def _llm_check() -> None:
         print("[FAIL] LLM: HC_LLM_PROVIDER is 'none' (set it to openai for Ollama)")
         raise SystemExit(1)
     got: list = []
+
+    def save_number(a: dict) -> str:
+        got.append(a.get("n"))
+        return "saved"
+
     tool = llm.Tool(
         "save_number",
         "Save a number",
         {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]},
-        lambda a: got.append(a.get("n")) or "saved",
+        save_number,
     )
     try:
         t = time.time()
@@ -139,7 +144,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("migrate", help="apply database migrations")
     api = sub.add_parser("api", help="run the web app and API")
-    api.add_argument("--host", default="0.0.0.0")  # noqa: S104 - container
+    api.add_argument("--host", default="0.0.0.0")
     api.add_argument("--port", type=int, default=8080)
     sub.add_parser("collector", help="run the scheduled collector")
     sub.add_parser("llm-check", help="test the LLM, tool calling and web search")

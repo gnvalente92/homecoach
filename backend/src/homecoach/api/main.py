@@ -98,7 +98,7 @@ def threshold_s(db: Session) -> float | None:
     snap = db.scalar(
         select(FitnessSnapshot).where(FitnessSnapshot.threshold_pace_s.is_not(None)).order_by(FitnessSnapshot.day.desc())
     )
-    return float(snap.threshold_pace_s) if snap else None
+    return float(snap.threshold_pace_s) if snap and snap.threshold_pace_s is not None else None
 
 
 def _pace(s: str) -> float:
@@ -162,7 +162,7 @@ def _resync_run() -> None:
     from homecoach.db import session_scope
 
     try:
-        _resync.update(stages={k: "pending" for k in ("sync", "plan", "coach", "outlooks")}, warnings=[])
+        _resync.update(stages=dict.fromkeys(("sync", "plan", "coach", "outlooks"), "pending"), warnings=[])
         _resync.update(step="Re-reading your whole history from COROS")
         _resync["stages"]["sync"] = "running"
         stats = run_once(full=True)

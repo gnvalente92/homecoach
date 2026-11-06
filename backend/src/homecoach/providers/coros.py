@@ -60,7 +60,7 @@ class CorosProvider:
 
     def __init__(self, email: str, password: str, region: str = "eu", client: httpx.Client | None = None):
         self._email = email
-        self._pwd_md5 = hashlib.md5(password.encode()).hexdigest()  # noqa: S324 - required by the API
+        self._pwd_md5 = hashlib.md5(password.encode()).hexdigest()
         self._base = BASE_URLS[region]
         self._client = client or httpx.Client(timeout=30)
         self._token: str | None = None

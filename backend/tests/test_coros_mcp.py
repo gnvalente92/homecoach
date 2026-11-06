@@ -3,6 +3,7 @@ against a mocked server."""
 
 import json
 from datetime import date, timedelta
+from typing import ClassVar
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -346,11 +347,11 @@ def test_long_ranges_are_fetched_in_windows():
     calls = []
 
     class FakeSession:
-        tools = {
+        tools: ClassVar[dict] = {
             "querySportRecords": {"inputSchema": {"properties": {"startDate": {}, "endDate": {}}}},
             "queryDailyHealthData": {"inputSchema": {"properties": {"days": {}}}},
         }
-        state: dict = {}
+        state: ClassVar[dict] = {}
 
         def call(self, name, args):
             calls.append((name, args))

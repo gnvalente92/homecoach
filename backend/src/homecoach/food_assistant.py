@@ -83,28 +83,26 @@ the user gives them. Don't moralise about food choices. Never mention or estimat
 
 def check_item(i: dict) -> dict:
     try:
-        item = {
-            "name": str(i["name"]).strip()[:120],
-            "quantity": str(i.get("quantity") or "").strip()[:60] or None,
-            **{k: round(float(i[k]), 1) for k in ("kcal", "protein_g", "carbs_g", "fat_g")},
-        }
+        name = str(i["name"]).strip()[:120]
+        quantity = str(i.get("quantity") or "").strip()[:60] or None
+        kcal, protein, carbs, fat = (round(float(i[k]), 1) for k in ("kcal", "protein_g", "carbs_g", "fat_g"))
     except (KeyError, TypeError, ValueError) as e:
         raise ToolRejected("each item needs name, quantity and numeric kcal, protein_g, carbs_g, fat_g") from e
-    if not item["name"]:
+    if not name:
         raise ToolRejected("an item has no name")
-    if min(item["kcal"], item["protein_g"], item["carbs_g"], item["fat_g"]) < 0:
-        raise ToolRejected(f"{item['name']}: values can't be negative")
-    if item["kcal"] > 3000 or item["protein_g"] > 250 or item["carbs_g"] > 500 or item["fat_g"] > 250:
-        raise ToolRejected(f"{item['name']}: that's more than one sitting; check the portion")
-    macros = 4 * (item["protein_g"] + item["carbs_g"]) + 9 * item["fat_g"]
-    alcohol = any(w in item["name"].lower() for w in ALCOHOL)
-    off = item["kcal"] - macros
+    if min(kcal, protein, carbs, fat) < 0:
+        raise ToolRejected(f"{name}: values can't be negative")
+    if kcal > 3000 or protein > 250 or carbs > 500 or fat > 250:
+        raise ToolRejected(f"{name}: that's more than one sitting; check the portion")
+    macros = 4 * (protein + carbs) + 9 * fat
+    alcohol = any(w in name.lower() for w in ALCOHOL)
+    off = kcal - macros
     if abs(off) > max(40, 0.25 * macros) and not (alcohol and off > 0):
         raise ToolRejected(
-            f"{item['name']}: {item['kcal']:g} kcal doesn't match the macros "
-            f"(4×{item['protein_g']:g} + 4×{item['carbs_g']:g} + 9×{item['fat_g']:g} = {macros:.0f}); fix the numbers"
+            f"{name}: {kcal:g} kcal doesn't match the macros "
+            f"(4×{protein:g} + 4×{carbs:g} + 9×{fat:g} = {macros:.0f}); fix the numbers"
         )
-    return item
+    return {"name": name, "quantity": quantity, "kcal": kcal, "protein_g": protein, "carbs_g": carbs, "fat_g": fat}
 
 
 def chat(s: Settings, messages: list[dict], today: date, day: date, target: dict | None, eaten: dict | None, client=None) -> dict:

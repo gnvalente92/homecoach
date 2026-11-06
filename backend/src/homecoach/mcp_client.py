@@ -145,8 +145,12 @@ def authorization_url(meta: dict, client: dict, redirect_uri: str) -> tuple[str,
 
 def _token_request(meta: dict, client: dict, data: dict, http: httpx.Client) -> dict:
     data = {**data, "client_id": client["client_id"], "resource": meta["resource"]}
-    auth = (client["client_id"], client["client_secret"]) if client.get("client_secret") else None
-    r = http.post(meta["token_endpoint"], data=data, auth=auth, headers={"accept": "application/json"})
+    secret = client.get("client_secret")
+    headers = {"accept": "application/json"}
+    if secret:  # confidential client: HTTP basic auth; public clients (PKCE) send only client_id
+        r = http.post(meta["token_endpoint"], data=data, headers=headers, auth=httpx.BasicAuth(client["client_id"], secret))
+    else:
+        r = http.post(meta["token_endpoint"], data=data, headers=headers)
     if r.status_code >= 400:
         raise AuthRequired(f"token request failed ({r.status_code}): {r.text[:300]}")
     t = r.json()

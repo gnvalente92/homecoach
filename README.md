@@ -233,12 +233,18 @@ The most common ones:
 
 ```sh
 cd backend && python -m venv .venv && . .venv/bin/activate && pip install -c constraints.txt -e ".[dev]"
-pytest && ruff check .
+ruff check . && ruff format --check . && mypy && pytest --cov      # what CI runs (coverage floor in pyproject.toml)
 HC_DATABASE_URL=sqlite:///demo.db python scripts/seed_demo.py     # synthetic data
 HC_DATABASE_URL=sqlite:///demo.db HC_PROVIDER=none HC_WEB_DIR=../web/dist uvicorn homecoach.api.main:app --port 8080
 ```
 
 In a second terminal, run `cd web && npm ci && npm run dev` from the repository root. Vite proxies `/api` to port 8080.
+`npm run lint` checks the UI with ESLint.
+
+CI runs all of the above on every push, plus the database migrations on SQLite and Postgres 16 (up and down) and a
+gitleaks secret scan. Dependabot opens weekly update PRs for the Python, npm, GitHub Actions and Docker pins. Tests use
+synthetic data only: never commit real activities, health data or FIT files (`backend/tests/fixtures/README.md`).
+A new setting needs an entry in `.env.example` and in `x-env` in `docker-compose.yml`; a test checks both.
 The backend requires Python 3.12 or newer; CI uses 3.12. The frontend build uses Node 24 LTS in CI and Docker.
 Refresh dependency pins deliberately with
 `uv pip compile backend/pyproject.toml --extra dev --universal --python-version 3.12 --no-header --no-annotate --output-file backend/constraints.txt`

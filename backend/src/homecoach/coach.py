@@ -8,7 +8,7 @@ back to the model to revise. Proposals are stored as 'pending' and only change t
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -232,9 +232,3 @@ def suggestion_out(x: CoachSuggestion) -> dict:
         "status": x.status,
         "created_at": x.created_at,
     }
-
-
-def weekly_review_due(now: datetime, s: Settings, last_review: datetime | None) -> bool:
-    if now.weekday() != s.coach_review_dow or now.hour < s.coach_review_hour:
-        return False
-    return last_review is None or last_review.date() < now.date()

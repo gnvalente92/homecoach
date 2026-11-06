@@ -108,7 +108,7 @@ def test_coach_proposes_with_guardrails_and_accept_applies(client, monkeypatch):
     race_day = (api.today() + timedelta(days=60)).isoformat()
     client.post("/api/races", json={"name": "Half", "date": race_day, "distance_km": 21.1, "priority": "A"})
     plan = client.get("/api/plan").json()
-    nxt = [s for s in plan["next_week"] if s["session"] == "Long run"][0]
+    nxt = next(s for s in plan["next_week"] if s["session"] == "Long run")
     llm = respx.post(LLM).mock(
         side_effect=[
             httpx.Response(
@@ -141,10 +141,10 @@ def test_coach_proposes_with_guardrails_and_accept_applies(client, monkeypatch):
     assert "my calf is a bit sore" in sent["messages"][-1]["content"] and "NEXT WEEK" in sent["messages"][0]["content"]
     assert "Rejected:" in json.loads(llm.calls[1].request.content)["messages"][-1]["content"]
     # pending suggestions do not change the plan...
-    assert [s for s in client.get("/api/plan").json()["next_week"] if s["session"] == "Long run"][0]["km"] == nxt["km"]
+    assert next(s for s in client.get("/api/plan").json()["next_week"] if s["session"] == "Long run")["km"] == nxt["km"]
     # ...accepted ones do
     client.post(f"/api/coach/suggestions/{out['suggestions'][0]['id']}", json={"status": "accepted"})
-    lr = [s for s in client.get("/api/plan").json()["next_week"] if s["session"] == "Long run"][0]
+    lr = next(s for s in client.get("/api/plan").json()["next_week"] if s["session"] == "Long run")
     assert lr["km"] == nxt["km"] - 3 and lr["adjusted"] and "calf" in lr["reason"].lower()
     state = client.get("/api/coach").json()
     assert state["checkins"][0]["text"] == "my calf is a bit sore" and state["notes"][0]["text"].startswith("Trimmed")

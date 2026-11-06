@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5", "respx>=0.21", "httpx2>=2.16"]  # httpx2: what starlette.testclient uses
+dev = ["pytest>=8", "pytest-cov>=6", "ruff>=0.5", "mypy>=1.15", "respx>=0.21", "httpx2>=2.16", "pyyaml>=6"]  # httpx2: what starlette.testclient uses
 
 [project.scripts]
 homecoach = "homecoach.cli:main"
@@ -36,7 +36,31 @@ line-length = 130
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
+select = ["E", "F", "I", "B", "UP", "SIM", "C4", "PIE", "RET", "PERF", "RUF"]
+# ×, – and similar characters are deliberate in user-facing text
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["apscheduler.*", "fitdecode.*"]  # no type stubs published
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# a leaked connection or file handle is a bug: fail the test run instead of printing a warning
+filterwarnings = ["error::ResourceWarning", "error::pytest.PytestUnraisableExceptionWarning"]
+
+[tool.coverage.run]
+source = ["homecoach"]
+omit = ["*/migrations/*"]  # run by the migration smoke test in CI, not by pytest
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true

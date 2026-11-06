@@ -80,7 +80,7 @@ def set_state(s: Session, key: str, value: dict[str, Any]) -> None:
     s.add(st)
 
 
-def sync_provider(s: Session, provider: Provider, settings: Settings, *, full: bool = False) -> dict[str, int]:
+def sync_provider(s: Session, provider: Provider, settings: Settings, *, full: bool = False) -> dict[str, int | str]:
     """Incremental by default: re-reads the last few days (late uploads, recalculated metrics).
     Full: re-reads the whole backfill window."""
     today = date.today()
@@ -88,8 +88,8 @@ def sync_provider(s: Session, provider: Provider, settings: Settings, *, full: b
     first_run = "last_sync" not in state
     lookback = settings.backfill_days if (full or first_run) else 3
     start = today - timedelta(days=lookback)
-    stats = {
-        "mode": "full" if (full or first_run) else "incremental",
+    mode = "full" if (full or first_run) else "incremental"
+    stats: dict[str, int] = {
         "activities_new": 0,
         "activities_seen": 0,
         "days": 0,
@@ -124,7 +124,7 @@ def sync_provider(s: Session, provider: Provider, settings: Settings, *, full: b
             "last_full": (datetime.now().isoformat() if (full or first_run) else state.get("last_full")),
         },
     )
-    return stats
+    return {"mode": mode, **stats}
 
 
 def _ensure_fit(s: Session, provider: Provider, a: ActivityRecord, fit_dir: Path) -> int:

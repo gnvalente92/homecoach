@@ -34,7 +34,7 @@ def parse_fit(data: bytes, tz: str = "UTC") -> ActivityRecord | None:
         sport = f"{sport} ({str(sub).replace('_', ' ')})"
     return ActivityRecord(
         provider="fit",
-        external_id=hashlib.sha1(data).hexdigest()[:20],  # noqa: S324 - content id, not security
+        external_id=hashlib.sha1(data).hexdigest()[:20],
         sport=sport,
         start_time=local,
         local_date=local.date(),

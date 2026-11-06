@@ -1,3 +1,5 @@
+"""Database engine and sessions. One engine per process; `session_scope` commits or rolls back a unit of work."""
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 

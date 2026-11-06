@@ -32,7 +32,7 @@ const card = (title, note, body) => h('div', { class: 'card' }, h('h3', {}, titl
 const tile = (label, value, unit, sub, cls) =>
   h('div', { class: 'card tile' }, h('div', { class: 'label' }, label),
     h('div', { class: `value ${cls || ''}` }, value ?? '—', unit ? h('small', {}, ` ${unit}`) : null), sub ? h('div', { class: 'sub' }, sub) : null);
-const delta = (cur, prev, goodUp = true, unit = '') => {
+const delta = (cur, prev, goodUp = true) => {
   if (cur == null || prev == null || prev === 0) return null;
   const d = cur - prev, pctv = Math.round((d / Math.abs(prev)) * 100);
   if (!pctv) return h('span', { class: 'delta' }, '±0% vs previous');
@@ -628,11 +628,11 @@ async function syncStatus() {
         onclick: async () => { if (confirm('Disconnect COROS? Syncing stops until you connect again.')) { await api('/coros/disconnect', { method: 'POST' }); corosBanner().then(syncStatus); } } }, '· COROS ✓') : '');
   } catch { $('#sync').textContent = ''; }
 }
-try { if (localStorage.getItem('hc.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch {}
+try { if (localStorage.getItem('hc.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* storage blocked: stay dark */ }
 $('#theme').addEventListener('click', () => {
   const light = document.documentElement.dataset.theme !== 'light';
   if (light) document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
-  try { localStorage.setItem('hc.theme', light ? 'light' : 'dark'); } catch {}
+  try { localStorage.setItem('hc.theme', light ? 'light' : 'dark'); } catch { /* storage blocked: theme lasts this visit */ }
   route();
 });
 window.addEventListener('hashchange', route);

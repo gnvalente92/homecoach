@@ -113,7 +113,7 @@ def classify(workouts: list[Workout], race: RaceDay | None, loading: RaceDay | N
         g = 8.0 if race.distance_km >= 30 else 7.0 if race.distance_km >= 15 else 6.0
         return "Race", g, [f"Race day: {race.name} ({race.distance_km:g} km)"]
     if loading:
-        days, g = CARB_LOAD["marathon" if loading.distance_km >= 30 else "half"]
+        _days, g = CARB_LOAD["marathon" if loading.distance_km >= 30 else "half"]
         return "Carb loading", g, [f"Carb loading for {loading.name}: topping up glycogen"]
     runs = [w for w in workouts if w.kind != "walk"]
     if not runs:

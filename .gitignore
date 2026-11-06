@@ -4,6 +4,8 @@
 !.env.example
 data/
 *.fit
+# the only exception: made-up test data (backend/tests/fixtures/README.md)
+!backend/tests/fixtures/synthetic_*.fit
 *.sql
 *.sql.gz
 *.dump
@@ -13,6 +15,9 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
 *.egg-info/
 # node
 node_modules/
