@@ -37,7 +37,7 @@ jobs:
           export HC_DATABASE_URL=postgresql+psycopg://homecoach:homecoach@localhost:5432/homecoach
           /tmp/inst/bin/homecoach migrate
           /tmp/inst/bin/python -c "import logging; logging.basicConfig(level=logging.INFO); from alembic import command; from alembic.config import Config; import homecoach, pathlib; c = Config(); c.set_main_option('script_location', str(pathlib.Path(homecoach.__file__).parent / 'migrations')); command.downgrade(c, 'base'); command.upgrade(c, 'head')"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "24" }
       - name: web lint and build
         run: cd web && npm ci && npm run lint && npm run build
