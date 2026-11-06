@@ -185,8 +185,8 @@ def parse_fitness(text: str, today: date) -> FitnessRecord | None:
     preds = {}
     for key, label in (("5k", r"5 km"), ("10k", r"10 km"), ("half", r"Half Marathon"), ("marathon", r"(?<!Half )Marathon")):
         s = num(label + r" Prediction:\s*([\d:]+)", text, str)
-        if s and hms(s):
-            preds[key] = hms(s)
+        if s and (seconds := hms(s)):
+            preds[key] = seconds
     return FitnessRecord(
         day=today,
         vo2max=vo2,

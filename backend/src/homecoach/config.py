@@ -1,3 +1,5 @@
+"""Runtime configuration: every setting is an environment variable with the HC_ prefix (see .env.example)."""
+
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -41,6 +43,10 @@ class Settings(BaseSettings):
     llm_model: str = "qwen2.5:3b"
     llm_api_key: SecretStr | None = None
     llm_timeout_s: int = 600
+    # How much the model may "think" before answering. Thinking costs CPU time on every request:
+    #   low     = gpt-oss: "Reasoning: low"; Qwen3: thinking off (/no_think). Recommended on a CPU.
+    #   default = leave it to the model
+    llm_reasoning: Literal["low", "default"] = "low"
     # Self-hosted web search used by the race assistant (SearXNG with the JSON format enabled)
     searxng_url: str = "http://searxng:8080"
     # Weekly coach review (local time): day of week 0=Mon..6=Sun and hour

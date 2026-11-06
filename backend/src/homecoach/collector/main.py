@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import signal
+from typing import cast
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -74,9 +75,10 @@ def _run_once(full: bool = False) -> dict | None:
         if settings.provider == "coros-mcp":
             from homecoach import coros_auth
             from homecoach.mcp_client import AuthRequired
+            from homecoach.providers.coros_mcp import CorosMCPProvider
 
             try:
-                provider = get_provider(settings, s)
+                provider = cast(CorosMCPProvider, get_provider(settings, s))
             except AuthRequired as e:
                 log.warning("%s", e)
                 return None
@@ -106,7 +108,10 @@ def _run_once(full: bool = False) -> dict | None:
                 if st.pop("changed", False) and coros_auth.load(s).get("tokens") == original_tokens:
                     coros_auth.save(s, st)
         else:
-            stats = sync_provider(s, get_provider(settings), settings, full=full)
+            web_provider = get_provider(settings)
+            if web_provider is None:
+                return None
+            stats = sync_provider(s, web_provider, settings, full=full)
     log.info("sync %s done: %s", stats.get("mode", "incremental"), stats)
     return stats
 

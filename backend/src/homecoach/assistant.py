@@ -90,8 +90,8 @@ def chat(s: Settings, messages: list[dict[str, str]], today: date, races: list[d
         if date.fromisoformat(d) < today:
             raise ToolRejected(f"{d} is in the past; find the next edition on or after {today.isoformat()}")
         try:
-            km = float(args.get("distance_km"))
-        except (TypeError, ValueError) as e:
+            km = float(args["distance_km"])
+        except (KeyError, TypeError, ValueError) as e:
             raise ToolRejected("distance_km must be a number") from e
         if not 0.5 <= km <= 400:
             raise ToolRejected("distance_km looks wrong")
@@ -123,7 +123,7 @@ def chat(s: Settings, messages: list[dict[str, str]], today: date, races: list[d
         ),
     ]
     res = llm.run(s, system_prompt(today, s.athlete_name, races), messages, tools, max_rounds=8, client=client)
-    used = [p.get("source_url") for p in proposals if p.get("source_url")]
+    used = [str(p["source_url"]) for p in proposals if p.get("source_url")]
     src = [{"url": u, "title": sources.get(u, u)} for u in used] or [{"url": u, "title": t} for u, t in list(sources.items())[:2]]
     return {
         "reply": res.text or ("Here's what I found." if proposals else "Sorry, I couldn't find that."),

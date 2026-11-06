@@ -1,3 +1,5 @@
+"""Alembic environment: runs the migrations in versions/ against HC_DATABASE_URL."""
+
 from alembic import context
 from sqlalchemy import create_engine
 
@@ -16,10 +18,13 @@ def run() -> None:
             context.run_migrations()
         return
     engine = create_engine(url)
-    with engine.connect() as conn:
-        context.configure(connection=conn, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+    try:
+        with engine.connect() as conn:
+            context.configure(connection=conn, target_metadata=target_metadata)
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        engine.dispose()  # don't leave an idle connection open for the rest of the process (the web app runs this first)
 
 
 run()

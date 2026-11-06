@@ -200,12 +200,26 @@ equipment and restrictions; recommendations remain pending until accepted.
    The `ollama-pull` container downloads the model (about 2 GB) once and then exits.
 4. Check everything works: `sudo docker exec ix-homecoach-web-1 homecoach llm-check`
 
-**Model choice** (CPU-only works; Ollama can't use Intel iGPUs):
+**Model choice** (CPU-only works; Ollama can't use Intel iGPUs). On a CPU, speed depends on how many parameters the
+model uses for each word, not how big it is. *Mixture-of-experts* (MoE) models keep a large model in RAM but use only a
+few billion parameters per word, so they trade memory for much better answers at about the speed of a small model:
 
-| Model | RAM | Speed on a 6-core desktop CPU | Notes |
+| Model | RAM | Used per word | Notes |
 |---|---|---|---|
-| `qwen2.5:3b` | ~2.5 GB | race lookup ~1–2 min | Default; reliable tool calling |
-| `qwen2.5:7b` | ~5.5 GB | ~2× slower | Better judgement for the coach |
+| `qwen2.5:3b` | ~2.5 GB | 3B | Default; fast, but makes the most mistakes |
+| `gpt-oss:20b` | ~14 GB | 3.6B (MoE) | Strong tool calling; good middle ground |
+| `qwen3:30b-a3b` | ~19 GB | 3B (MoE) | Best quality here |
+
+`HC_LLM_REASONING=low` (the default) keeps these models' "thinking" short, which saves a lot of CPU time per request.
+`HC_OLLAMA_CPUS` (default 4) caps the cores Ollama uses so the NAS stays responsive.
+
+On TrueNAS, the ZFS cache (ARC) uses most free RAM. It gives memory back when apps need it, but slowly, so a 14–19 GB model
+can make the first load slow or fail. Cap the ARC with an *Init/Shutdown script* (System → Advanced → Init/Shutdown
+Scripts, type *Command*, when *Post Init*), for example 8 GiB:
+
+```sh
+echo 8589934592 > /sys/module/zfs/parameters/zfs_arc_max
+```
 
 Any OpenAI-compatible server works (llama.cpp, LM Studio, vLLM, a remote box with a GPU): point `HC_LLM_BASE_URL` at it.
 `HC_LLM_PROVIDER=anthropic` with `HC_LLM_API_KEY` uses the Claude API instead, which is paid.
@@ -233,12 +247,18 @@ The most common ones:
 
 ```sh
 cd backend && python -m venv .venv && . .venv/bin/activate && pip install -c constraints.txt -e ".[dev]"
-pytest && ruff check .
+ruff check . && ruff format --check . && mypy && pytest --cov      # what CI runs (coverage floor in pyproject.toml)
 HC_DATABASE_URL=sqlite:///demo.db python scripts/seed_demo.py     # synthetic data
 HC_DATABASE_URL=sqlite:///demo.db HC_PROVIDER=none HC_WEB_DIR=../web/dist uvicorn homecoach.api.main:app --port 8080
 ```
 
 In a second terminal, run `cd web && npm ci && npm run dev` from the repository root. Vite proxies `/api` to port 8080.
+`npm run lint` checks the UI with ESLint.
+
+CI runs all of the above on every push, plus the database migrations on SQLite and Postgres 16 (up and down) and a
+gitleaks secret scan. Dependabot opens weekly update PRs for the Python, npm, GitHub Actions and Docker pins. Tests use
+synthetic data only: never commit real activities, health data or FIT files (`backend/tests/fixtures/README.md`).
+A new setting needs an entry in `.env.example` and in `x-env` in `docker-compose.yml`; a test checks both.
 The backend requires Python 3.12 or newer; CI uses 3.12. The frontend build uses Node 24 LTS in CI and Docker.
 Refresh dependency pins deliberately with
 `uv pip compile backend/pyproject.toml --extra dev --universal --python-version 3.12 --no-header --no-annotate --output-file backend/constraints.txt`

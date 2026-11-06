@@ -7,7 +7,7 @@ export function trainingPages({ api, h, show, card, resetCache, pace, hm }) {
   const labelled = (text, field) => h('label', {}, h('span', {}, text), field);
   const number = (value) => Number(value.toFixed(2)).toLocaleString();
   // 217.39 h -> "217 h 23 min"; 131.468 km -> "131.5 km"; one formatter per measure so every view reads the same
-  const hours = (h) => { const m = Math.round(h * 60); const hh = Math.floor(m / 60), mm = m % 60; return mm ? `${hh.toLocaleString()} h ${mm} min` : `${hh.toLocaleString()} h`; };
+  const hours = (value) => { const m = Math.round(value * 60); const hh = Math.floor(m / 60), mm = m % 60; return mm ? `${hh.toLocaleString()} h ${mm} min` : `${hh.toLocaleString()} h`; };
   const km = (v) => `${Number(v.toFixed(1)).toLocaleString()} km`;
   const amount = (metric, v) => (metric === 'duration_h' ? hours(v) : metric === 'distance_km' ? km(v) : `${v} ${v === 1 ? 'session' : 'sessions'}`);
   const feedback = () => h('p', { class: 'note error', role: 'status', 'aria-live': 'polite' });

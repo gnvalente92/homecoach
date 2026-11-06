@@ -4,11 +4,17 @@ on:
   pull_request:
   workflow_dispatch:
 permissions:
-  contents: read
-  packages: write
+  contents: read  # least privilege by default; only the image job can publish
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:  # the database the NAS runs; migrations are checked against it, not only SQLite
+        image: postgres:16
+        env: { POSTGRES_USER: homecoach, POSTGRES_PASSWORD: homecoach, POSTGRES_DB: homecoach }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U homecoach" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -17,20 +23,31 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -c backend/constraints.txt -e "backend[dev]"
-      - run: ruff check backend && ruff format --check backend
-      - run: pytest backend -q
+      - name: lint and format
+        run: ruff check backend && ruff format --check backend
+      - name: type check
+        run: cd backend && mypy
+      - name: tests (coverage must stay at or above the floor in pyproject.toml)
+        run: cd backend && pytest -q --cov
         env: { HC_WEB_DIR: /nonexistent }
-      - name: migrations run from a non-editable install (as in the image)
+      - name: migrations run from a non-editable install (as in the image), on SQLite and Postgres, up and down
         run: |
           python -m venv /tmp/inst && /tmp/inst/bin/pip install -q -c backend/constraints.txt ./backend
           cd / && HC_DATABASE_URL=sqlite:////tmp/smoke.db /tmp/inst/bin/homecoach migrate
+          export HC_DATABASE_URL=postgresql+psycopg://homecoach:homecoach@localhost:5432/homecoach
+          /tmp/inst/bin/homecoach migrate
+          /tmp/inst/bin/python -c "import logging; logging.basicConfig(level=logging.INFO); from alembic import command; from alembic.config import Config; import homecoach, pathlib; c = Config(); c.set_main_option('script_location', str(pathlib.Path(homecoach.__file__).parent / 'migrations')); command.downgrade(c, 'base'); command.upgrade(c, 'head')"
       - uses: actions/setup-node@v4
         with: { node-version: "24" }
-      - run: cd web && npm ci && npm run build
+      - name: web lint and build
+        run: cd web && npm ci && npm run lint && npm run build
   image:
     needs: test
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push the image to ghcr.io
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3

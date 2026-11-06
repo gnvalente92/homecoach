@@ -4,11 +4,14 @@ services:
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    cpus: ${HC_OLLAMA_CPUS:-4}        # leave cores for the NAS itself; CPU inference uses every core it's given
     environment:
       OLLAMA_CONTEXT_LENGTH: "8192"   # the coach's context is a few thousand tokens
       OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_MAX_LOADED_MODELS: "1"
       OLLAMA_KEEP_ALIVE: "15m"        # unload from RAM when idle
+      OLLAMA_FLASH_ATTENTION: "1"     # less memory for the context
+      OLLAMA_KV_CACHE_TYPE: "q8_0"    # halves the context cache's memory (needs flash attention)
     volumes:
       - ${HC_OLLAMA_PATH:-./data/ollama}:/root/.ollama
 

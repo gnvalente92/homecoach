@@ -19,7 +19,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from statistics import mean, pstdev
-from typing import Any
+from typing import Any, TypedDict
 
 DAY = timedelta(days=1)
 
@@ -215,7 +215,7 @@ def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longe
         return "use the strength action for strength sessions"
     if any(x.day == a.day and x.status == "Done" and x.session != "Strength" for x in week) and a.action != "skip":
         return f"a workout is already recorded on {a.day}"
-    if a.action in ("shorten", "move", "skip") and a.action != "skip" and not _main_planned(week, a.day):
+    if a.action in ("shorten", "move") and not _main_planned(week, a.day):
         return f"there is no planned run on {a.day} to {a.action}"
     if a.action == "move":
         if not a.move_to or a.move_to < today:
@@ -230,7 +230,8 @@ def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longe
     if a.action in ("replace", "shorten"):
         if not 0 <= km <= 42.5:
             return "km must be between 0 and 42.5"
-        if a.action == "shorten" and (a.km is None or half(km) > _main_planned(week, a.day).km):
+        planned = _main_planned(week, a.day)
+        if a.action == "shorten" and (a.km is None or planned is None or half(km) > planned.km):
             return "shorten must not increase the planned distance"
         cap = max(12.0, longest_recent * 1.15)
         if km > cap:
@@ -296,9 +297,9 @@ def baseline(runs: list[Run], days: list[Day], today: date, threshold_s: float |
     days = sorted((d for d in days if d.day <= today), key=lambda d: d.day)
     fresh = [d for d in days if d.day >= today - DAY]
 
-    def avg(xs: list[float]) -> float | None:
-        xs = [x for x in xs if x is not None]
-        return round(mean(xs), 1) if xs else None
+    def avg(xs: list[float | None]) -> float | None:
+        vals = [x for x in xs if x is not None]
+        return round(mean(vals), 1) if vals else None
 
     last = next((d for d in reversed(fresh) if d.hrv_avg is not None), None)
     hrv_lo, hrv_hi = (last.hrv_lo, last.hrv_hi) if last else (None, None)
@@ -488,7 +489,7 @@ def predicted_time(predictions: dict | None, km: float) -> tuple[float, str] | N
 
 def best_effort(runs: list[Run], today: date, km: float, weeks: int = 8) -> dict | None:
     """The recent run (3 km or longer) that converts to the fastest time at the race distance."""
-    best = None
+    best: dict[str, Any] | None = None
     for r in runs:
         if r.type != "Run" or not r.duration_s or r.km < 3 or not today - weeks * 7 * DAY < r.day <= today:
             continue
@@ -541,10 +542,10 @@ def race_outlook(race: RaceIn, runs: list[Run], today: date, predictions: dict |
     }
     if race.goal_time_s:
         gp = race.goal_time_s / km
-        recent = [r for r in runs if r.type == "Run" and r.pace_s and today - 28 * DAY < r.day <= today]
-        out["goal_pace_km_4w"] = round(sum(r.km for r in recent if r.pace_s <= gp * 1.01), 1)
+        recent = [(r, r.pace_s) for r in runs if r.type == "Run" and r.pace_s and today - 28 * DAY < r.day <= today]
+        out["goal_pace_km_4w"] = round(sum(r.km for r, pace in recent if pace <= gp * 1.01), 1)
         out["runs_4w"] = len(recent)
-        out["fastest_pace_4w_s"] = round(min(r.pace_s for r in recent)) if recent else None
+        out["fastest_pace_4w_s"] = round(min(pace for _, pace in recent)) if recent else None
         if estimate:
             out["gap_s"] = estimate - race.goal_time_s
             out["gap_pct"] = round((estimate - race.goal_time_s) / race.goal_time_s, 4)
@@ -564,11 +565,19 @@ def target_race(races: list[RaceIn], today: date) -> RaceIn | None:
     return next((r for r in up if r.priority == "A"), up[0] if up else None)
 
 
-CATS = {
-    "marathon": dict(peak=60, long_max=32, taper=3, cut=[0.75, 0.6, 0.4], share=0.5),
-    "half": dict(peak=45, long_max=20, taper=2, cut=[0.75, 0.5], share=0.45),
-    "10k": dict(peak=40, long_max=16, taper=1, cut=[0.6], share=0.45),
-    "5k": dict(peak=35, long_max=13, taper=1, cut=[0.6], share=0.45),
+class RaceCategory(TypedDict):
+    peak: float  # weekly km at the peak of the build
+    long_max: float  # longest long run, km
+    taper: int  # taper weeks, race week included
+    cut: list[float]  # taper volume as a share of the peak, per taper week
+    share: float  # long run as a share of the week
+
+
+CATS: dict[str, RaceCategory] = {
+    "marathon": {"peak": 60, "long_max": 32, "taper": 3, "cut": [0.75, 0.6, 0.4], "share": 0.5},
+    "half": {"peak": 45, "long_max": 20, "taper": 2, "cut": [0.75, 0.5], "share": 0.45},
+    "10k": {"peak": 40, "long_max": 16, "taper": 1, "cut": [0.6], "share": 0.45},
+    "5k": {"peak": 35, "long_max": 13, "taper": 1, "cut": [0.6], "share": 0.45},
 }
 
 
@@ -677,14 +686,14 @@ def _lay(
     days = [1, 3, 4, 6] if runs == 4 else [1, 3, 6]
     items: list[Session] = []
     for i in range(n_easy):
-        s = i == 0 and strides
+        with_strides = i == 0 and strides
         items.append(
             Session(
                 b.next_monday,
-                "Easy run + strides" if s else "Easy run",
+                "Easy run + strides" if with_strides else "Easy run",
                 easy_km,
                 easy,
-                "Relaxed; finish with 6 × 20 s strides" if s else "Conversational effort, keep heart rate low",
+                "Relaxed; finish with 6 × 20 s strides" if with_strides else "Conversational effort, keep heart rate low",
             )
         )
     if quality:
@@ -707,6 +716,7 @@ def next_week(b: Baseline, weeks: list[Week], r: Readiness) -> list[Session]:
     T = b.threshold_s
     easy = easy_range(T)
     k = r.factor
+    q: Session | None
     if not weeks:  # no race: keep fitness
         total = max(b.weekly_km, 18) * k
         q = Session(
@@ -795,20 +805,19 @@ def this_week(
     target = half(max(b.weekly_km, 18) * r.factor * (0.85 if race_soon else 1))
     wk_runs = [x for x in runs if x.type == "Run" and x.km and mon <= x.day <= days[-1]]
     done_km = round(sum(x.km for x in wk_runs), 1)
-    out: list[Session] = []
-    for a in done or wk_runs:
-        if mon <= a.day <= days[-1]:
-            out.append(
-                Session(
-                    a.day,
-                    "Strength" if a.type == "Strength" else a.sport,
-                    round(a.km, 2) if a.km else 0,
-                    f"{fmt_pace(a.pace_s)} /km" if a.pace_s else "",
-                    f"{a.duration_s // 60} min" + (f" · avg HR {a.avg_hr}" if a.avg_hr else "") if a.duration_s else "",
-                    status="Done",
-                    duration_min=a.duration_s // 60 if a.duration_s and a.type == "Strength" else None,
-                )
-            )
+    out: list[Session] = [
+        Session(
+            a.day,
+            "Strength" if a.type == "Strength" else a.sport,
+            round(a.km, 2) if a.km else 0,
+            f"{fmt_pace(a.pace_s)} /km" if a.pace_s else "",
+            f"{a.duration_s // 60} min" + (f" · avg HR {a.avg_hr}" if a.avg_hr else "") if a.duration_s else "",
+            status="Done",
+            duration_min=a.duration_s // 60 if a.duration_s and a.type == "Strength" else None,
+        )
+        for a in done or wk_runs
+        if mon <= a.day <= days[-1]
+    ]
     ran_today = any(x.day == today for x in wk_runs)
     free = [d for d in days if d > today or (d == today and not ran_today)]
     left = max(0.0, target - done_km)

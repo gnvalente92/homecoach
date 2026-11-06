@@ -1,5 +1,6 @@
 # homecoach on TrueNAS SCALE (Apps → Discover Apps → Install via YAML) or any Docker host.
 # All personal settings come from .env (see .env.example). Nothing personal lives in this file.
+# Every HC_ setting must be listed in x-env below to reach the containers (tests/test_config_docs.py checks this).
 name: homecoach
 
 x-env: &env
@@ -14,12 +15,15 @@ x-env: &env
   HC_SYNC_INTERVAL_MINUTES: ${HC_SYNC_INTERVAL_MINUTES:-10}
   HC_FULL_SYNC_HOUR: ${HC_FULL_SYNC_HOUR:-3}
   HC_BACKFILL_DAYS: ${HC_BACKFILL_DAYS:-730}
+  HC_DOWNLOAD_FIT: ${HC_DOWNLOAD_FIT:-true}
   HC_THRESHOLD_PACE: ${HC_THRESHOLD_PACE:-}
   HC_AUTH_USER: ${HC_AUTH_USER:-}
   HC_LLM_PROVIDER: ${HC_LLM_PROVIDER:-none}
   HC_LLM_BASE_URL: ${HC_LLM_BASE_URL:-http://ollama:11434/v1}
   HC_LLM_MODEL: ${HC_LLM_MODEL:-qwen2.5:3b}
   HC_LLM_API_KEY: ${HC_LLM_API_KEY:-}
+  HC_LLM_TIMEOUT_S: ${HC_LLM_TIMEOUT_S:-600}
+  HC_LLM_REASONING: ${HC_LLM_REASONING:-low}
   HC_SEARXNG_URL: ${HC_SEARXNG_URL:-http://searxng:8080}
   HC_COACH_REVIEW_DOW: ${HC_COACH_REVIEW_DOW:-6}
   HC_COACH_REVIEW_HOUR: ${HC_COACH_REVIEW_HOUR:-19}

@@ -44,5 +44,7 @@ def client(monkeypatch):
                 ),
             )
         s.commit()
-    yield TestClient(api.app)
+    with TestClient(api.app) as c:
+        yield c
     api.app.dependency_overrides.clear()
+    engine.dispose()  # close the in-memory database (no ResourceWarnings between tests)

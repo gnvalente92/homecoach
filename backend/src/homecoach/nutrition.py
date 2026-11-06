@@ -28,6 +28,9 @@ def missing(row: NutritionProfile | None) -> list[str]:
 
 
 def to_engine(row: NutritionProfile) -> N.Profile:
+    """The engine's profile; callers check `missing()` first."""
+    if row.weight_kg is None or row.height_cm is None or row.birth_date is None or not row.sex:
+        raise ValueError("the nutrition profile is incomplete")
     return N.Profile(row.weight_kg, row.height_cm, row.birth_date, row.sex, row.goal or "maintain", row.protein_g_per_kg or 1.8)
 
 
@@ -136,7 +139,7 @@ def eaten(db: Db, start: date, end: date) -> dict[date, dict]:
 
 def week_targets(db: Db, plan: dict, start: date, end: date, today: date) -> list[dict]:
     row = get_profile(db)
-    if missing(row):
+    if row is None or missing(row):
         return []
     prof = to_engine(row)
     races = [N.RaceDay(r.day, r.distance_km, r.priority, r.name) for r in db.scalars(select(Race).where(Race.day >= start))]

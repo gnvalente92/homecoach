@@ -4,8 +4,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Protocol
 
-SPORT_TYPES = ("Run", "Strength", "Walk", "Ride", "Swim", "Other")
-
 
 def classify_sport(name: str) -> str:
     n = name.lower()

@@ -1,0 +1,19 @@
+# Weekly update PRs for every dependency the project pins. CI runs the full checks on each one.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend  # pins live in backend/constraints.txt
+    schedule: { interval: weekly }
+    groups:
+      python: { patterns: ["*"] }
+  - package-ecosystem: npm
+    directory: /web
+    schedule: { interval: weekly }
+    groups:
+      web: { patterns: ["*"] }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }

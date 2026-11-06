@@ -2,7 +2,7 @@
 
 import calendar
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -89,8 +89,8 @@ def goals(db: Session = Db) -> list[dict]:
     day = today()
     out = []
     for goal in db.scalars(select(TrainingGoal).order_by(TrainingGoal.id)):
-        start, end = period_bounds(day, goal.period)
-        measured = totals(db, start, min(end, day + timedelta(days=1)), goal.sport)
+        start, end = period_bounds(day, cast(Period, goal.period))
+        measured = totals(db, start, min(end, day + timedelta(days=1)), cast(Sport, goal.sport))
         value = measured[goal.metric]
         missing = measured.get({"distance_km": "missing_distance", "duration_h": "missing_duration"}.get(goal.metric), 0)
         out.append(

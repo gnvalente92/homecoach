@@ -1,3 +1,4 @@
+import itertools
 from datetime import date, timedelta
 
 import pytest
@@ -66,7 +67,7 @@ def test_marathon_plan_shape(base):
     assert [w.phase for w in weeks[-3:]] == ["Taper", "Taper", "Race week"]
     assert max(w.total_km for w in weeks) <= 60
     assert max(w.long_km for w in weeks if w.phase != "Race week") >= 28
-    for a, b in zip(weeks, weeks[1:], strict=False):  # never more than ~10% jump week to week (ignoring easier weeks)
+    for a, b in itertools.pairwise(weeks):  # never more than ~10% jump week to week (ignoring easier weeks)
         if not a.easier and not b.easier and b.phase in ("Base", "Build", "Peak") and a.phase in ("Base", "Build", "Peak"):
             assert b.total_km <= a.total_km * 1.1 + 0.5
     assert weeks[3].easier and weeks[3].total_km < weeks[2].total_km
