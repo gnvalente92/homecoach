@@ -59,7 +59,14 @@ function sessionsGrid(list, todayIso) {
     s.duration_min && s.status !== 'Done' ? h('div', { class: 'km' }, `${s.duration_min} min`) : null,
     s.pace ? h('div', { class: 'pace' }, s.pace) : null,
     s.detail ? h('div', { class: 'detail' }, s.detail) : null,
-    s.adjusted && s.reason && s.status !== 'Rest' ? h('div', { class: 'detail adj-reason' }, `Coach: ${s.reason}`) : null)));
+    s.adjusted && s.reason && s.status !== 'Rest' ? h('div', { class: 'detail adj-reason' }, `Coach: ${s.reason}`) : null,
+    s.suggestion_id ? h('button', { class: 'link undo', title: 'Undo this coach change and go back to the plan', onclick: (e) => undoChange(s.suggestion_id, e.currentTarget) }, 'Undo') : null)));
+}
+
+async function undoChange(id, button) {
+  button.disabled = true;
+  try { await api(`/coach/suggestions/${id}`, { method: 'POST', body: JSON.stringify({ status: 'dismissed' }) }); resetCache(); route(); }
+  catch (err) { button.disabled = false; button.textContent = `Couldn’t undo: ${err.message}`; }
 }
 
 function periodSeg(onChange) {
@@ -197,7 +204,7 @@ async function overview() {
 state.coachChat = state.coachChat || [];
 async function coachPanel(onChange) {
   const st = await api('/coach').catch(() => ({ enabled: false, suggestions: [], notes: [], checkins: [] }));
-  const actionText = (x) => ({ skip: 'Skip', shorten: `Shorten to ${x.km} km`, move: `Move to ${x.move_to ? d3.utcFormat('%a')(parse(x.move_to)) : '?'}`,
+  const actionText = (x) => (x.action === 'replace' && x.session === 'Strength' ? `Gym instead of the run · ${x.duration_min} min` : { skip: 'Skip', shorten: `Shorten to ${x.km} km`, move: `Move to ${x.move_to ? d3.utcFormat('%a')(parse(x.move_to)) : '?'}`,
     strength: x.duration_min ? `Strength · ${x.duration_min} min` : 'Skip strength',
     replace: `${x.session}${x.km ? ` · ${x.km} km` : ''}${x.pace ? ` · ${x.pace}` : ''}` }[x.action] || x.action);
   const pending = st.suggestions.filter((x) => x.status === 'pending');
@@ -214,7 +221,9 @@ async function coachPanel(onChange) {
         catch (err) { button.disabled = false; alert(`This suggestion cannot be applied: ${err.message}`); }
       } }, 'Accept'),
       h('button', { class: 'link', onclick: async () => { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'dismissed' }) }); onChange(); } }, 'Dismiss'))
-      : h('span', { class: 'note', style: 'margin:0' }, x.status === 'accepted' ? 'Accepted ✓' : 'Dismissed'));
+      : x.status === 'accepted' ? h('span', { class: 'note', style: 'margin:0' }, 'Accepted ✓ ',
+        h('button', { class: 'link', onclick: (e) => undoChange(x.id, e.currentTarget) }, 'Undo'))
+        : h('span', { class: 'note', style: 'margin:0' }, x.status === 'superseded' ? 'Replaced by a newer change' : 'Dismissed'));
   const log = h('div', { class: 'chat-log' });
   const render = () => { log.replaceChildren(...state.coachChat.map((m) => h('div', { class: `msg ${m.role}` }, h('div', { class: 'bubble' }, m.content)))); log.scrollTop = log.scrollHeight; };
   const input = h('input', { placeholder: st.enabled ? 'How is it going? e.g. “calf is sore”, “travelling Thu–Sat”, “tempo felt easy”' : 'Coach not set up', disabled: st.enabled ? null : '' });

@@ -27,9 +27,14 @@ ADJUST_SCHEMA = {
         "action": {"type": "string", "enum": ["replace", "shorten", "skip", "move", "strength"]},
         "duration_min": {
             "type": "integer",
-            "description": "strength: 1–60 minutes to add/update, or 0 to remove a planned strength session",
+            "description": "strength: 1–60 minutes to add/update, 0 to remove; replace with session 'Strength': 15–60",
         },
-        "session": {"type": "string", "description": "replace: session name, e.g. 'Easy run', 'Tempo run', 'Long run'"},
+        "session": {
+            "type": "string",
+            "description": (
+                "replace: session name, e.g. 'Easy run', 'Tempo run', 'Long run', or 'Strength' to swap the run for gym"
+            ),
+        },
         "km": {"type": "number", "description": "replace/shorten: distance in km"},
         "pace": {"type": "string", "description": "replace: target pace, e.g. '5:54–6:17 /km'"},
         "detail": {
@@ -108,14 +113,22 @@ volume, taper) and you only adjust specific days, based on how training is reall
 Look at: whether recent weeks hit the plan, missed or extra runs, long-run progression, readiness and the
 athlete's check-ins (soreness, illness, travel, schedule, how sessions felt).
 
-To change the plan, call propose_adjustment once per day you want to change (replace, shorten, skip, or
-move within the same week). The app enforces limits; if a call is rejected, read why and propose something
-smaller or don't change that day. The athlete accepts or dismisses each change. Don't re-propose changes
-that are already marked adjusted.
+To change the plan, call propose_adjustment once per day you want to change. Pick the action that matches
+what should happen:
+- skip: no run that day (rest). Not for moving a run: the run is gone.
+- move: the run happens on another day of the same week instead (set move_to).
+- shorten: same run, fewer km.
+- replace: a different run that day (session name and km are required).
+- replace with session 'Strength' (duration_min, detail): swap that day's run for a gym session.
+- strength: add or update a gym session next to the day's run (duration_min=0 removes a planned one).
+One change per day: a newly accepted change for a day replaces the older one. The app enforces limits; if
+a call is rejected, read why and propose something smaller or don't change that day. The athlete accepts
+or dismisses each change. Don't re-propose changes that are already marked adjusted.
 
 Review strength training as well as running. Use action='strength' to add or update a strength session on
 a date, with duration_min and a concrete, conservative session description (exercises and simple instructions).
-This keeps any run on that day. Use duration_min=0 to remove a planned strength session. Consider recorded
+This keeps any run on that day; to do gym instead of the run, use replace with session 'Strength'.
+Use duration_min=0 to remove a planned strength session. Consider recorded
 strength workouts, experience, equipment mentioned in check-ins, soreness, recovery and proximity to races.
 Ask about missing experience or equipment rather than assuming heavy weights or advanced exercises.
 The app limits suggestions to two strength sessions per week and 60 minutes per session, and rejects race-day

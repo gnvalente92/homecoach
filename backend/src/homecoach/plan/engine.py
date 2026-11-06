@@ -127,12 +127,15 @@ class Session:
     adjusted: bool = False  # changed by an accepted coach suggestion
     reason: str = ""
     duration_min: int | None = None
+    suggestion_id: int | None = None  # the accepted coach suggestion that made this change (for Undo)
 
 
 @dataclass
 class Adjustment:
+    """One coach change to a day. replace with session "Strength" swaps that day's run for a gym session."""
+
     day: date
-    action: str  # replace | shorten | skip | move
+    action: str  # replace | shorten | skip | move | strength
     session: str | None = None
     km: float | None = None
     pace: str | None = None
@@ -140,6 +143,15 @@ class Adjustment:
     move_to: date | None = None
     reason: str = ""
     duration_min: int | None = None
+    id: int | None = None  # the CoachSuggestion row, when it came from one
+
+
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+MOVE_WORDS = ("move", "moved", "instead", "shift", "swap", "push", "do it on", "run on")
+
+
+def is_gym_swap(a: Adjustment) -> bool:
+    return a.action == "replace" and (a.session or "").strip().lower() == "strength"
 
 
 def _main_planned(items: list[Session], d: date) -> Session | None:
@@ -152,39 +164,45 @@ def apply_adjustments(items: list[Session], adjustments: list[Adjustment]) -> li
     out = [Session(**x.__dict__) for x in items]
     for a in adjustments:
         cur = _main_planned(out, a.day)
-        if a.action == "strength":
+        tag: dict[str, Any] = {"adjusted": True, "reason": a.reason, "suggestion_id": a.id}
+        if is_gym_swap(a):
+            out = [
+                x
+                for x in out
+                if not (
+                    x.day == a.day
+                    and x.status in ("Planned", "Rest")
+                    and (x is cur or x.session == "Strength" or x.status == "Rest")
+                )
+            ]
+            out.append(Session(a.day, "Strength", detail=a.detail or "", duration_min=a.duration_min, **tag))
+        elif a.action == "strength":
             out = [x for x in out if not (x.day == a.day and x.session == "Strength" and x.status == "Planned")]
             if a.duration_min:
                 out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
-                out.append(
-                    Session(a.day, "Strength", detail=a.detail or "", adjusted=True, reason=a.reason, duration_min=a.duration_min)
-                )
+                out.append(Session(a.day, "Strength", detail=a.detail or "", duration_min=a.duration_min, **tag))
             elif not any(x.day == a.day for x in out):
-                out.append(Session(a.day, "Rest", status="Rest", adjusted=True, reason=a.reason))
+                out.append(Session(a.day, "Rest", status="Rest", **tag))
         elif a.action == "skip":
             if cur:
                 out.remove(cur)
             out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
-            out.append(Session(a.day, "Rest", status="Rest", detail=a.reason, adjusted=True, reason=a.reason))
+            out.append(Session(a.day, "Rest", status="Rest", detail=a.reason, **tag))
         elif a.action == "shorten" and cur and a.km is not None:
-            cur.km, cur.adjusted, cur.reason = half(a.km), True, a.reason
+            cur.km, cur.adjusted, cur.reason, cur.suggestion_id = half(a.km), True, a.reason, a.id
         elif a.action == "move" and cur and a.move_to:
             out.remove(cur)
             out = [x for x in out if not (x.day == a.move_to and x.status == "Rest")]
             displaced = _main_planned(out, a.move_to)
             if displaced:
                 out.remove(displaced)
-            out.append(Session(**{**cur.__dict__, "day": a.move_to, "adjusted": True, "reason": a.reason}))
-            out.append(Session(a.day, "Rest", status="Rest", detail=f"Moved to {a.move_to:%a}", adjusted=True, reason=a.reason))
+            out.append(Session(**{**cur.__dict__, "day": a.move_to, **tag}))
+            out.append(Session(a.day, "Rest", status="Rest", detail=f"Moved to {a.move_to:%a}", **tag))
         elif a.action == "replace":
             if cur:
                 out.remove(cur)
             out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
-            out.append(
-                Session(
-                    a.day, a.session or "Easy run", half(a.km or 0), a.pace or "", a.detail or "", adjusted=True, reason=a.reason
-                )
-            )
+            out.append(Session(a.day, a.session or "Easy run", half(a.km or 0), a.pace or "", a.detail or "", **tag))
     return sorted(out, key=lambda x: (x.day, x.status != "Done"))
 
 
@@ -211,8 +229,30 @@ def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longe
         if sum(x.session == "Strength" and x.status in ("Planned", "Done") for x in after) > 2:
             return "coach suggestions are limited to two strength sessions per week"
         return None
+    if is_gym_swap(a):
+        if type(a.duration_min) is not int or not 15 <= a.duration_min <= 60:
+            return "to swap a run for gym, give duration_min as a whole number from 15 to 60"
+        if not (a.detail or "").strip():
+            return "describe the strength session and its exercises"
+        if a.km or a.pace or a.move_to:
+            return "a gym swap uses duration_min and detail, not km, pace or move_to"
+        if any(x.day == a.day and x.status == "Done" for x in week):
+            return f"a workout is already recorded on {a.day}"
+        if any(x.day == a.day and "race" in x.session.lower().split(":")[0] for x in week):
+            return "do not replace a race with a gym session"
+        after = apply_adjustments(week, [a])
+        if sum(x.session == "Strength" and x.status in ("Planned", "Done") for x in after) > 2:
+            return "coach suggestions are limited to two strength sessions per week"
+        return None
     if a.session == "Strength" or a.duration_min is not None:
-        return "use the strength action for strength sessions"
+        return "for gym: replace with session 'Strength' swaps the run; the strength action adds gym alongside a run"
+    if a.action == "replace" and not a.km:
+        return "replace needs a distance in km; use skip to drop the run, or session 'Strength' to swap it for gym"
+    if a.action == "skip":
+        own = WEEKDAYS[a.day.weekday()]
+        text = a.reason.lower()
+        if any(w in text for w in MOVE_WORDS) and any(d in text for d in WEEKDAYS if d != own):
+            return "if the run should happen on another day, use move with move_to instead of skip"
     if any(x.day == a.day and x.status == "Done" and x.session != "Strength" for x in week) and a.action != "skip":
         return f"a workout is already recorded on {a.day}"
     if a.action in ("shorten", "move") and not _main_planned(week, a.day):
