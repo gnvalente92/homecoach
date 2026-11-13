@@ -6,7 +6,7 @@ RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HC_WEB_DIR=/app/web HC_DATA_DIR=/data
 WORKDIR /app
 COPY backend/pyproject.toml backend/constraints.txt ./
