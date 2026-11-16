@@ -14,7 +14,7 @@ from typing import Literal
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, select, text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from homecoach import __version__
@@ -23,12 +23,9 @@ from homecoach.db import get_session
 from homecoach.models import (
     Activity,
     CheckIn,
-    CoachNote,
-    CoachSuggestion,
     DailyMetric,
     FitnessSnapshot,
     Race,
-    RaceInsight,
     SyncState,
 )
 from homecoach.plan import engine as E
@@ -157,12 +154,11 @@ _resync_lock = threading.Lock()
 
 
 def _resync_run() -> None:
-    from homecoach import llm, outlook
     from homecoach.collector.main import run_once
     from homecoach.db import session_scope
 
     try:
-        _resync.update(stages=dict.fromkeys(("sync", "plan", "coach", "outlooks"), "pending"), warnings=[])
+        _resync.update(stages=dict.fromkeys(("sync", "plan"), "pending"), warnings=[])
         _resync.update(step="Re-reading your whole history from COROS")
         _resync["stages"]["sync"] = "running"
         stats = run_once(full=True)
@@ -175,39 +171,6 @@ def _resync_run() -> None:
         with session_scope() as db:
             compute_plan(db)
         _resync["stages"]["plan"] = "completed"
-        s = get_settings()
-        if llm.enabled(s):
-            _resync.update(step="Reviewing the updated plan and refreshing coach recommendations")
-            _resync["stages"]["coach"] = "running"
-            try:
-                review = run_review()
-                _resync["coach_suggestions"] = len(review["suggestions"])
-                _resync["stages"]["coach"] = "completed"
-            except Exception:
-                log.exception("coach refresh during full resync failed")
-                _resync["stages"]["coach"] = "failed"
-                _resync["warnings"].append("Coach recommendations could not be refreshed; previous suggestions were retained.")
-            _resync["stages"]["outlooks"] = "running"
-            failed_outlooks = 0
-            with session_scope() as db:
-                races = [r for r in db.scalars(select(Race).where(Race.day >= today())) if r.goal_time_s]
-                for i, r in enumerate(races, 1):
-                    _resync.update(step=f"Updating the race outlook ({i}/{len(races)}): {r.name}")
-                    try:
-                        outlook.interpret(s, db, r, today(), force=True)
-                        db.commit()
-                    except Exception as e:  # one race failing shouldn't stop the rest
-                        db.rollback()
-                        failed_outlooks += 1
-                        log.warning("race outlook for %s failed: %s", r.name, e)
-            _resync["stages"]["outlooks"] = "failed" if failed_outlooks else "completed"
-            if failed_outlooks:
-                _resync["warnings"].append(f"{failed_outlooks} race outlook(s) could not be refreshed.")
-        else:
-            _resync["stages"].update(coach="skipped", outlooks="skipped")
-            _resync["warnings"].append(
-                "AI is disabled: the rule-based plan was rebuilt; coach recommendations and AI outlooks were skipped."
-            )
         _resync.update(error=None)
     except Exception as e:
         log.exception("full resync failed")
@@ -224,7 +187,7 @@ def _resync_run() -> None:
 
 @app.post("/api/resync", status_code=202)
 def resync() -> dict:
-    """Re-read everything from the provider, then refresh race outlooks. The plan is computed from the data on
+    """Re-read everything from the provider, then rebuild the plan. The plan is computed from the data on
     every request, so it updates by itself once the data is in."""
     if not _resync_lock.acquire(blocking=False):
         return {**_resync, "already_running": True}
@@ -445,7 +408,6 @@ def delete_race(race_id: int, db: Session = Db) -> None:
     r = db.get(Race, race_id)
     if not r:
         raise HTTPException(404, "race not found")
-    db.execute(delete(RaceInsight).where(RaceInsight.race_id == race_id))
     db.delete(r)
 
 
@@ -456,76 +418,43 @@ def outlook_out(db: Session, r: Race) -> dict:
     from homecoach import outlook
 
     f = jsonable(outlook.facts_for(db, r, today()))
-    ins = outlook.latest(db, r.id)
-    f["insight"] = {"text": ins.text, "day": ins.day, "today": ins.day == today()} if ins else None
+    f["summary"] = outlook.summary(f)
     return f
 
 
 @app.get("/api/races/outlook")
 def races_outlook(db: Session = Db) -> dict:
-    from homecoach import llm
-
     races = db.scalars(select(Race).where(Race.day >= today()).order_by(Race.day))
-    return {"llm": llm.enabled(get_settings()), "races": [outlook_out(db, r) for r in races]}
+    return {"races": [outlook_out(db, r) for r in races]}
 
 
-class OutlookBody(BaseModel):
-    force: bool = False
+# ---- races via Claude (copy a prompt, paste the answer back) -------------------------------------
 
 
-@app.post("/api/races/{race_id}/outlook")
-def race_outlook_ai(race_id: int, body: OutlookBody | None = None, db: Session = Db) -> dict:
-    """Ask the local AI to interpret the outlook (cached for the day unless force)."""
-    from homecoach import llm, outlook
+class PasteBody(BaseModel):
+    text: str = Field(min_length=1, max_length=50_000)
 
-    s = get_settings()
-    r = db.get(Race, race_id)
-    if not r:
-        raise HTTPException(404, "race not found")
-    if not llm.enabled(s):
-        raise HTTPException(409, "the local AI is off (set HC_LLM_PROVIDER)")
-    if not r.goal_time_s:
-        raise HTTPException(400, "set a goal time for this race first")
+
+def _upcoming_races(db: Session) -> list[dict]:
+    return [race_out(r) for r in db.scalars(select(Race).where(Race.day >= today()).order_by(Race.day))]
+
+
+@app.get("/api/races/prompt")
+def race_prompt(request: str = Query("", max_length=500), db: Session = Db) -> dict:
+    from homecoach import paste
+
+    return {"prompt": paste.race_prompt(request, today(), _upcoming_races(db))}
+
+
+@app.post("/api/races/import")
+def race_import(body: PasteBody, db: Session = Db) -> dict:
+    """Check Claude's answer and return the races as proposals; nothing is saved here."""
+    from homecoach import paste
+
     try:
-        outlook.interpret(s, db, r, today(), force=bool(body and body.force))
-    except llm.LLMError as e:
-        raise HTTPException(502, str(e)) from e
-    db.commit()
-    return outlook_out(db, r)
-
-
-# ---- race assistant -----------------------------------------------------------------------------
-
-
-class ChatMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str = Field(max_length=4000)
-
-
-class ChatBody(BaseModel):
-    messages: list[ChatMessage] = Field(min_length=1, max_length=30)
-
-
-@app.get("/api/assistant")
-def assistant_status() -> dict:
-    from homecoach import llm
-
-    s = get_settings()
-    return {"enabled": llm.enabled(s), "provider": s.llm_provider, "model": s.llm_model}
-
-
-@app.post("/api/assistant/chat")
-def assistant_chat(body: ChatBody, db: Session = Db) -> dict:
-    from homecoach.assistant import chat
-    from homecoach.llm import LLMError
-
-    if body.messages[-1].role != "user":
-        raise HTTPException(422, "the last message must be from the user")
-    races = [race_out(r) for r in db.scalars(select(Race).where(Race.day >= today()).order_by(Race.day))]
-    try:
-        return jsonable(chat(get_settings(), [m.model_dump() for m in body.messages], today(), races))
-    except LLMError as e:
-        raise HTTPException(503, str(e)) from e
+        return jsonable({"proposals": paste.parse_races(body.text, today(), _upcoming_races(db))})
+    except paste.PasteError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 # ---- COROS connection (official MCP) -------------------------------------------------------------
@@ -537,7 +466,7 @@ class ConnectBody(BaseModel):
     paste: bool = False
 
 
-class PasteBody(BaseModel):
+class CorosPasteBody(BaseModel):
     url: str = Field(max_length=4000)
 
 
@@ -590,7 +519,7 @@ def coros_callback(db: Session = Db, code: str = "", state: str = "", error: str
 
 
 @app.post("/api/coros/paste")
-def coros_paste(body: PasteBody, db: Session = Db) -> dict:
+def coros_paste(body: CorosPasteBody, db: Session = Db) -> dict:
     from homecoach import coros_auth
     from homecoach.mcp_client import MCPError
 
@@ -611,123 +540,44 @@ def coros_disconnect(db: Session = Db) -> dict:
     return coros_auth.status(db)
 
 
-# ---- coach ------------------------------------------------------------------------------------
-
-_review_lock = threading.Lock()
+# ---- check-ins ----------------------------------------------------------------------------------
 
 
-def run_review(source: str = "review") -> dict:
-    """Weekly review (also used by the collector). Uses its own DB session."""
-    from homecoach import coach
-    from homecoach.db import session_scope
-    from homecoach.locking import execution_lock
-
-    with _review_lock, execution_lock(get_settings().data_dir / ".coach-review.lock") as acquired, session_scope() as db:
-        if not acquired:
-            raise RuntimeError("another coach review is running")
-        pending = list(db.scalars(select(CoachSuggestion.id).where(CoachSuggestion.status == "pending")))
-        result = coach.run(
-            get_settings(), db, jsonable(compute_plan(db)), today(), [{"role": "user", "content": coach.REVIEW_PROMPT}], source
-        )
-        # A failed model call rolls back this transaction and retains the old recommendations.
-        if pending:
-            db.execute(delete(CoachSuggestion).where(CoachSuggestion.id.in_(pending), CoachSuggestion.status == "pending"))
-        return result
+class CheckInBody(BaseModel):
+    feeling: Literal["good", "tired", "sore", "ill", "travelling"]
+    days: int | None = Field(None, ge=1, le=14)  # how long it changes the plan; default by feeling
+    note: str = Field("", max_length=1000)
 
 
-@app.get("/api/coach")
-def coach_state(db: Session = Db) -> dict:
-    from homecoach import coach, llm
-
-    s = get_settings()
-    notes = db.scalars(select(CoachNote).order_by(CoachNote.created_at.desc()).limit(5))
-    sugg = db.scalars(
-        select(CoachSuggestion)
-        .where(CoachSuggestion.day >= E.monday(today()))
-        .order_by(CoachSuggestion.created_at.desc())
-        .limit(30)
-    )
-    checks = db.scalars(select(CheckIn).order_by(CheckIn.created_at.desc()).limit(10))
-    return jsonable(
-        {
-            "enabled": llm.enabled(s),
-            "provider": s.llm_provider,
-            "model": s.llm_model,
-            "review_running": _review_lock.locked(),
-            "notes": [{"id": n.id, "kind": n.kind, "text": n.text, "created_at": n.created_at} for n in notes],
-            "suggestions": [coach.suggestion_out(x) for x in sugg],
-            "checkins": [{"id": c.id, "day": c.day, "text": c.text} for c in checks],
-        }
-    )
+def checkin_out(c: CheckIn) -> dict:
+    return {"id": c.id, "day": c.day, "feeling": c.feeling, "until": c.until, "note": c.text, "created_at": c.created_at}
 
 
-@app.post("/api/coach/chat")
-def coach_chat(body: ChatBody, db: Session = Db) -> dict:
-    from homecoach import coach
-    from homecoach.llm import LLMError
-
-    if body.messages[-1].role != "user":
-        raise HTTPException(422, "the last message must be from the user")
-    db.add(CheckIn(day=today(), text=body.messages[-1].content.strip()))  # the coach remembers what you tell it
-    db.commit()  # keep the check-in even if the model call fails
-    try:
-        out = coach.run(get_settings(), db, jsonable(compute_plan(db)), today(), [m.model_dump() for m in body.messages], "chat")
-    except LLMError as e:
-        raise HTTPException(503, str(e)) from e
-    return jsonable(out)
+def active_checkin(db: Session, t: date) -> CheckIn | None:
+    """The latest check-in, if it still changes the plan today. A newer check-in replaces older ones."""
+    c = db.scalar(select(CheckIn).where(CheckIn.feeling.is_not(None)).order_by(CheckIn.created_at.desc(), CheckIn.id.desc()))
+    return c if c and c.feeling != "good" and c.until and c.day <= t <= c.until else None
 
 
-@app.post("/api/coach/review", status_code=202)
-def coach_review() -> dict:
-    from homecoach import llm
-
-    if not llm.enabled(get_settings()):
-        raise HTTPException(503, "No LLM is configured: set HC_LLM_PROVIDER in .env.")
-    if _review_lock.locked():
-        return {"started": False, "running": True}
-
-    def go() -> None:
-        try:
-            run_review()
-        except Exception:
-            import logging
-
-            logging.getLogger(__name__).exception("coach review failed")
-
-    threading.Thread(target=go, daemon=True).start()
-    return {"started": True}
+@app.get("/api/checkins")
+def checkins(db: Session = Db) -> dict:
+    t = today()
+    active = active_checkin(db, t)
+    recent = db.scalars(select(CheckIn).order_by(CheckIn.created_at.desc(), CheckIn.id.desc()).limit(10))
+    return jsonable({"active": checkin_out(active) if active else None, "recent": [checkin_out(c) for c in recent]})
 
 
-class SuggestionStatus(BaseModel):
-    status: Literal["accepted", "dismissed", "pending"]
+@app.post("/api/checkins", status_code=201)
+def add_checkin(body: CheckInBody, db: Session = Db) -> dict:
+    t = today()
+    days = body.days if body.days is not None else E.FEELINGS[body.feeling]
+    c = CheckIn(day=t, feeling=body.feeling, until=t + timedelta(days=days - 1) if days else None, text=body.note.strip())
+    db.add(c)
+    db.flush()
+    return jsonable(checkin_out(c))
 
 
-@app.post("/api/coach/suggestions/{sid}")
-def set_suggestion(sid: int, body: SuggestionStatus, db: Session = Db) -> dict:
-    from homecoach import coach
-
-    # Serialise decisions across web workers until the dependency commits this transaction.
-    if db.get_bind().dialect.name == "postgresql":
-        db.execute(text("SELECT pg_advisory_xact_lock(8742001)"))
-    x = db.get(CoachSuggestion, sid)
-    if not x:
-        raise HTTPException(404, "suggestion not found")
-    if body.status == "accepted" and x.status != "accepted":
-        p = compute_plan(db)
-        b = p["baseline"]
-        if not E.monday(today()) <= x.day < b.next_monday + timedelta(days=7):
-            raise HTTPException(409, "suggestion is outside this week and next week; request a new review")
-        week = p["this_week"]["sessions"] if x.day < b.next_monday else p["next_week"]
-        target = p["this_week"]["target_km"] if x.day < b.next_monday else p["next_week_target_km"]
-        a = E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min)
-        why = E.check_adjustment(a, week, target, b.longest_km, today())
-        if why:
-            raise HTTPException(409, why)
-    x.status = body.status
-    return jsonable(coach.suggestion_out(x))
-
-
-@app.delete("/api/coach/checkins/{cid}", status_code=204)
+@app.delete("/api/checkins/{cid}", status_code=204)
 def delete_checkin(cid: int, db: Session = Db) -> None:
     x = db.get(CheckIn, cid)
     if not x:
@@ -743,17 +593,8 @@ def plan(db: Session = Db) -> dict:
     return jsonable(compute_plan(db))
 
 
-def accepted_adjustments(db: Session, start: date) -> list[E.Adjustment]:
-    rows = db.scalars(
-        select(CoachSuggestion)
-        .where(CoachSuggestion.status == "accepted", CoachSuggestion.day >= start)
-        .order_by(CoachSuggestion.created_at, CoachSuggestion.id)
-    )
-    return [E.Adjustment(x.day, x.action, x.session, x.km, x.pace, x.detail, x.move_to, x.reason, x.duration_min) for x in rows]
-
-
 def compute_plan(db: Session) -> dict:
-    """The rule plan for this and next week with accepted coach changes applied (shared by the API and the coach)."""
+    """The rule plan for this and next week with the active check-in applied, plus the rolling next and last 7 days."""
     t = today()
     acts = list(db.scalars(select(Activity).where(Activity.local_date >= t - timedelta(days=70))))
     rows = list(db.scalars(select(DailyMetric).where(DailyMetric.day >= t - timedelta(days=35)).order_by(DailyMetric.day)))
@@ -765,29 +606,28 @@ def compute_plan(db: Session) -> dict:
     tw, done_km, target_km = E.this_week(runs, b, races, r, done=runs)
     nw = E.next_week(b, weeks, r)
     next_target = round(sum(x.km for x in nw if x.session != "Strength"), 1)
-    adj = accepted_adjustments(db, E.monday(t))
-    inactive = []
-    for a in adj:
-        if a.day < t or a.day >= b.next_monday + timedelta(days=7):
-            continue
-        current, target = (tw, target_km) if a.day < b.next_monday else (nw, next_target)
-        why = E.check_adjustment(a, current, target, b.longest_km, t)
-        if why:
-            inactive.append({"day": a.day, "reason": why})
-        elif a.day < b.next_monday:
-            tw = E.apply_adjustments(tw, [a])
-        else:
-            nw = E.apply_adjustments(nw, [a])
+    check = active_checkin(db, t)
+    if check and check.until:
+        tw = E.apply_checkin(tw, check.feeling or "", t, check.until)
+        nw = E.apply_checkin(nw, check.feeling or "", t, check.until)
+    end = t + timedelta(days=6)
+    todo = E.window([*tw, *nw], t, end)
+    done = E.recent_done(runs, t)  # all sports, for display; km counts runs only
     tr = E.target_race(races, t)
     return {
         "athlete_name": get_settings().athlete_name,
         "baseline": b,
         "readiness": r,
         "target_race": tr,
+        "checkin": checkin_out(check) if check else None,
+        "next_7_days": {"todo": todo, "todo_km": round(sum(x.km for x in todo if x.session != "Strength"), 1)},
+        "last_7_days": {
+            "done": done,
+            "done_km": round(sum(x.km for x in runs if x.type == "Run" and x.day >= t - timedelta(days=6)), 1),
+        },
         "this_week": {"sessions": tw, "done_km": done_km, "target_km": target_km},
         "next_week": nw,
         "next_week_target_km": next_target,
-        "inactive_suggestions": inactive,
         "race_plan": weeks,
         "road": E.road(runs, weeks, b),
         "shape": {**E.endurance_shape(runs, t, tr.distance_km), "race": tr.name} if tr else None,

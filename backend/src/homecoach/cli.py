@@ -16,58 +16,6 @@ def _migrate() -> None:
     command.upgrade(cfg, "head")
 
 
-def _llm_check() -> None:
-    import time
-
-    from homecoach import llm, websearch
-    from homecoach.config import get_settings
-
-    s = get_settings()
-    print(f"provider={s.llm_provider} model={s.llm_model} url={s.llm_base_url} searxng={s.searxng_url}")
-    ok = True
-    try:
-        t = time.time()
-        r = websearch.search(s, "Corrida Sporting 10 km Lisboa")
-        print(f"[ok] web search: {len(r)} results in {time.time() - t:.1f}s" + (f", first: {r[0]['url']}" if r else ""))
-    except Exception as e:
-        ok = False
-        print(f"[FAIL] web search: {e}")
-    if not llm.enabled(s):
-        print("[FAIL] LLM: HC_LLM_PROVIDER is 'none' (set it to openai for Ollama)")
-        raise SystemExit(1)
-    got: list = []
-
-    def save_number(a: dict) -> str:
-        got.append(a.get("n"))
-        return "saved"
-
-    tool = llm.Tool(
-        "save_number",
-        "Save a number",
-        {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]},
-        save_number,
-    )
-    try:
-        t = time.time()
-        res = llm.run(
-            s,
-            "You are a test. Use the tool when asked.",
-            [{"role": "user", "content": "Call save_number with n=42, then say done."}],
-            [tool],
-            max_rounds=3,
-        )
-        dt = time.time() - t
-        if got == [42]:
-            print(f"[ok] LLM tool calling in {dt:.1f}s, reply: {res.text[:80]!r}")
-        else:
-            ok = False
-            print(f"[FAIL] LLM answered in {dt:.1f}s but didn't call the tool correctly (got {got}); try a bigger model")
-    except Exception as e:
-        ok = False
-        print(f"[FAIL] LLM: {e}")
-    raise SystemExit(0 if ok else 1)
-
-
 def _coros_check() -> None:
     """Walk through the official COROS connection step by step and say where it fails."""
     from datetime import date, timedelta
@@ -147,7 +95,6 @@ def main() -> None:
     api.add_argument("--host", default="0.0.0.0")
     api.add_argument("--port", type=int, default=8080)
     sub.add_parser("collector", help="run the scheduled collector")
-    sub.add_parser("llm-check", help="test the LLM, tool calling and web search")
     sub.add_parser("coros-check", help="test the official COROS connection and every data report")
     once = sub.add_parser("sync", help="run one sync now")
     once.add_argument("--full", action="store_true")
@@ -164,8 +111,6 @@ def main() -> None:
         from homecoach.collector.main import main as collector_main
 
         collector_main()
-    elif args.cmd == "llm-check":
-        _llm_check()
     elif args.cmd == "coros-check":
         _coros_check()
     elif args.cmd == "sync":

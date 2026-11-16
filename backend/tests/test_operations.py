@@ -1,17 +1,14 @@
-"""Operational paths: the FIT inbox, the collector's schedule, the CLI and the Claude API client. Synthetic data only."""
+"""Operational paths: the FIT inbox, the collector's schedule and the CLI. Synthetic data only."""
 
-import json
 import sys
 from datetime import date
 from pathlib import Path
 
-import httpx
 import pytest
-import respx
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
-from homecoach import cli, llm
+from homecoach import cli
 from homecoach.api import main as api
 from homecoach.collector import main as collector
 from homecoach.collector.sync import import_fit_inbox
@@ -94,10 +91,9 @@ def test_collector_schedules_every_job_and_syncs_once_at_start(monkeypatch, tmp_
     sched = made[0]
     assert sched.started and runs == [False] and (tmp_path / ".collector-heartbeat").exists()
     jobs = sched.jobs
-    assert set(jobs) == {"heartbeat", "incremental", "full", "coach-review"}
+    assert set(jobs) == {"heartbeat", "incremental", "full"}
     assert jobs["incremental"][2]["minutes"] == s.sync_interval_minutes and jobs["incremental"][2]["args"] == [False]
     assert jobs["full"][2]["hour"] == s.full_sync_hour and jobs["full"][2]["args"] == [True]
-    assert (jobs["coach-review"][2]["day_of_week"], jobs["coach-review"][2]["hour"]) == (s.coach_review_dow, s.coach_review_hour)
     assert all(j[2].get("max_instances", 1) == 1 for j in jobs.values())  # syncs never overlap
 
 
@@ -110,18 +106,6 @@ def test_a_failing_sync_never_stops_the_collector(monkeypatch, tmp_path):
     monkeypatch.setattr(collector, "run_once", boom)
     collector._safe(False)  # logs, doesn't raise
     assert (tmp_path / ".collector-heartbeat").exists()
-
-
-def test_weekly_review_runs_only_with_ai_and_after_a_sync(monkeypatch):
-    calls = []
-    monkeypatch.setattr(collector, "run_once", lambda full=False: calls.append("sync"))
-    monkeypatch.setattr(api, "run_review", lambda: calls.append("review") or {"suggestions": []})
-    monkeypatch.setattr(collector, "_outlook_target_race", lambda: calls.append("outlook"))
-    collector._weekly_review()
-    assert calls == []  # AI off: nothing to do
-    monkeypatch.setattr(api.get_settings(), "llm_provider", "openai")
-    collector._weekly_review()
-    assert calls == ["sync", "review", "outlook"]
 
 
 # ---- CLI ---------------------------------------------------------------------------------------------
@@ -155,50 +139,3 @@ def test_cli_sync_runs_one_sync(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["homecoach"])
     with pytest.raises(SystemExit):
         cli.main()  # a command is required
-
-
-# ---- Claude API path in the LLM client ---------------------------------------------------------------
-
-
-@respx.mock
-def test_anthropic_tool_loop(monkeypatch):
-    s = api.get_settings()
-    monkeypatch.setattr(s, "llm_provider", "anthropic")
-    monkeypatch.setattr(s, "llm_model", "claude-test")
-    from pydantic import SecretStr
-
-    monkeypatch.setattr(s, "llm_api_key", SecretStr("test-key"))
-    tool_use = {
-        "content": [
-            {"type": "text", "text": "Let me save it."},
-            {"type": "tool_use", "id": "t1", "name": "save", "input": {"n": 7}},
-        ]
-    }
-    final = {"content": [{"type": "text", "text": "<think>hidden</think>Saved 7."}]}
-    route = respx.post(llm.ANTHROPIC_URL).mock(side_effect=[httpx.Response(200, json=tool_use), httpx.Response(200, json=final)])
-    got = []
-    tool = llm.Tool(
-        "save",
-        "Save a number",
-        {"type": "object", "properties": {"n": {"type": "integer"}}},
-        lambda a: got.append(a["n"]) or "saved",
-    )
-    res = llm.run(s, "SYS", [{"role": "user", "content": "save 7"}], [tool])
-    assert res.text == "Saved 7." and got == [7]
-    first, second = (json.loads(c.request.content) for c in route.calls)
-    assert route.calls[0].request.headers["x-api-key"] == "test-key"
-    assert first["system"] == "SYS" and first["tools"][0]["input_schema"]["properties"]["n"]["type"] == "integer"
-    assert second["messages"][-1]["content"][0] == {"type": "tool_result", "tool_use_id": "t1", "content": "saved"}
-
-
-@respx.mock
-def test_llm_errors_are_reported_not_raised_raw(monkeypatch):
-    s = api.get_settings()
-    monkeypatch.setattr(s, "llm_provider", "openai")
-    monkeypatch.setattr(s, "llm_base_url", "http://llm.test/v1")
-    respx.post("http://llm.test/v1/chat/completions").mock(side_effect=httpx.ConnectError("refused"))
-    with pytest.raises(llm.LLMError, match="Couldn't reach the LLM"):
-        llm.run(s, "SYS", [{"role": "user", "content": "hi"}], [])
-    monkeypatch.setattr(s, "llm_provider", "none")
-    with pytest.raises(llm.LLMError, match="No LLM is configured"):
-        llm.run(s, "SYS", [{"role": "user", "content": "hi"}], [])

@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from homecoach.collector.sync import upsert_activity, upsert_daily, upsert_fitness
 from homecoach.db import Base, get_engine, session_scope
-from homecoach.models import CheckIn, CoachNote, CoachSuggestion, FoodEntry, NutritionProfile, Race, RaceInsight
+from homecoach.models import CheckIn, FoodEntry, NutritionProfile, Race
 from homecoach.providers.base import ActivityRecord, DailyRecord, FitnessRecord
 
 random.seed(7)
@@ -128,73 +128,16 @@ with session_scope() as s:
         Race(name="Coastal Half Marathon", day=sat + timedelta(days=71), distance_km=21.0975, goal_time_s=105 * 60, priority="A"),
     ]
     s.add_all(races)
-    s.add(CheckIn(day=today - timedelta(days=2), text="Left calf a bit tight after Tuesday's tempo."))
     s.add(
-        CoachNote(
-            kind="review",
-            text="Good week: three runs and two gym sessions, 31 km against a 33 km plan. The Thursday tempo was "
-            "on pace (4:52 /km) with heart rate under control. With the calf niggle, I'd keep Sunday's long run "
-            "easy and a little shorter, and leave the speed for next week.",
+        CheckIn(
+            day=today - timedelta(days=1),
+            feeling="sore",
+            until=today + timedelta(days=1),
+            text="Left calf a bit tight after the tempo.",
         )
     )
     s.flush()
 
-    # coach suggestions on the real plan days, plus the coach's reading of each race
-    from homecoach import outlook
-    from homecoach.api.main import compute_plan
-
-    plan = compute_plan(s)
-    this = [x for x in plan["this_week"]["sessions"] if x.status == "Planned" and x.day > today and x.km]
-    nxt = [x for x in plan["next_week"] if x.km and x.session != "Strength"]
-    if this:
-        long = max((x for x in this if "race" not in x.session.lower()), key=lambda x: x.km, default=this[0])
-        s.add(
-            CoachSuggestion(
-                day=long.day,
-                action="shorten",
-                km=round(long.km * 0.8),
-                reason="You mentioned a tight calf. Keeping the long run shorter and easy this week costs nothing "
-                "for the half and lowers the risk of it turning into an injury.",
-                source="review",
-            )
-        )
-    if nxt:
-        first = nxt[0]
-        s.add(
-            CoachSuggestion(
-                day=first.day,
-                action="replace",
-                session="Easy run + strides",
-                km=first.km,
-                pace=first.pace,
-                detail="Easy the whole way, then 6 × 20 s relaxed strides with full recovery.",
-                reason="A gentle way to bring some speed back after the calf settles, before next week's tempo.",
-                source="review",
-                status="accepted",
-            )
-        )
-    s.flush()
-
-    for r in races:
-        f = outlook.facts_for(s, r, today)
-        gap = f["gap_s"] or 0
-        mins, secs = divmod(abs(gap), 60)
-        gap_txt = f"about {mins + (secs >= 30)} minutes" if mins else f"{secs} seconds"
-        side = "slower than" if gap > 0 else "ahead of"
-        text = {
-            "On track": f"Your watch already puts you {gap_txt} {side} your goal, and your recent tempo runs back that "
-            "up. Run it as a controlled effort rather than an all-out race: it's a C race in the middle of a build.\n"
-            "Focus:\n- Start at goal pace, not faster\n- Treat it as Thursday's hard session\n- Keep Sunday easy afterwards",
-            "Within reach": f"You're about {gap_txt} {side} goal pace for this one, a gap of {abs(f['gap_pct']) * 100:.1f}%. "
-            f"With {f['weeks_to_go']:g} weeks to go, that's realistic: a few weeks of steady tempo work usually closes "
-            "one to two percent.\nFocus:\n- One tempo a week at goal pace\n- Practise the first 2 km at goal pace, "
-            "not faster\n- Mini-taper the week of the race",
-            "Stretch": f"Your current estimate is {gap_txt} {side} your goal ({abs(f['gap_pct']) * 100:.1f}%). "
-            f"With {f['weeks_to_go']:g} weeks left it's possible, but it needs your long runs to grow and some time "
-            "at goal pace every week. Endurance shape is the bigger lever here.\nFocus:\n- Build the long run towards "
-            "18–20 km\n- 3–5 km at goal pace inside the long run every other week\n- Protect sleep in the build weeks",
-        }.get(f["verdict"], "Not enough recent data for a reading yet.")
-        s.add(RaceInsight(race_id=r.id, day=today, text=text, facts=outlook._json(f)))
     from homecoach.collector.sync import set_state
 
     set_state(s, "provider:demo", {"last_sync": datetime.now().isoformat(), "last_full": datetime.now().isoformat()})

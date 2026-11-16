@@ -11,6 +11,7 @@ Rules:
   C races: replace that week's hard session.
 - Next week: week 1 of the race plan (or a "keep fitness" week with no race), scaled by readiness.
 - This week: what was done so far + suggestions for the remaining days to reach the week's target.
+- Check-ins (tired, sore, ill, travelling) ease the planned sessions for a few days; see apply_checkin.
 """
 
 from __future__ import annotations
@@ -124,127 +125,99 @@ class Session:
     pace: str = ""
     detail: str = ""
     status: str = "Planned"  # Planned | Done | Rest
-    adjusted: bool = False  # changed by an accepted coach suggestion
+    adjusted: bool = False  # changed by a check-in
     reason: str = ""
     duration_min: int | None = None
 
 
-@dataclass
-class Adjustment:
-    day: date
-    action: str  # replace | shorten | skip | move
-    session: str | None = None
-    km: float | None = None
-    pace: str | None = None
-    detail: str | None = None
-    move_to: date | None = None
-    reason: str = ""
-    duration_min: int | None = None
+# ---- check-ins ----------------------------------------------------------------------------------
+
+# How the athlete feels, and for how many days a check-in changes the plan by default.
+FEELINGS = {"good": 0, "tired": 2, "sore": 3, "ill": 3, "travelling": 3}
+HARD = ("Key session", "Threshold run", "Race-pace session", "Race-specific session", "Sharpener", "Race-pace sharpener")
 
 
-def _main_planned(items: list[Session], d: date) -> Session | None:
-    """The run planned on day d (ignores strength and done/rest entries)."""
-    return next((x for x in items if x.day == d and x.status == "Planned" and x.session != "Strength"), None)
+def _is_race(s: Session) -> bool:
+    return "race:" in s.session.lower()
 
 
-def apply_adjustments(items: list[Session], adjustments: list[Adjustment]) -> list[Session]:
-    """Apply accepted coach changes to a week's sessions. Done sessions are never touched."""
-    out = [Session(**x.__dict__) for x in items]
-    for a in adjustments:
-        cur = _main_planned(out, a.day)
-        if a.action == "strength":
-            out = [x for x in out if not (x.day == a.day and x.session == "Strength" and x.status == "Planned")]
-            if a.duration_min:
-                out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
-                out.append(
-                    Session(a.day, "Strength", detail=a.detail or "", adjusted=True, reason=a.reason, duration_min=a.duration_min)
-                )
-            elif not any(x.day == a.day for x in out):
-                out.append(Session(a.day, "Rest", status="Rest", adjusted=True, reason=a.reason))
-        elif a.action == "skip":
-            if cur:
-                out.remove(cur)
-            out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
-            out.append(Session(a.day, "Rest", status="Rest", detail=a.reason, adjusted=True, reason=a.reason))
-        elif a.action == "shorten" and cur and a.km is not None:
-            cur.km, cur.adjusted, cur.reason = half(a.km), True, a.reason
-        elif a.action == "move" and cur and a.move_to:
-            out.remove(cur)
-            out = [x for x in out if not (x.day == a.move_to and x.status == "Rest")]
-            displaced = _main_planned(out, a.move_to)
-            if displaced:
-                out.remove(displaced)
-            out.append(Session(**{**cur.__dict__, "day": a.move_to, "adjusted": True, "reason": a.reason}))
-            out.append(Session(a.day, "Rest", status="Rest", detail=f"Moved to {a.move_to:%a}", adjusted=True, reason=a.reason))
-        elif a.action == "replace":
-            if cur:
-                out.remove(cur)
-            out = [x for x in out if not (x.day == a.day and x.status == "Rest")]
+def apply_checkin(items: list[Session], feeling: str, start: date, end: date) -> list[Session]:
+    """Change planned sessions from start to end (inclusive) to fit how the athlete feels. Races and done
+    sessions are never changed; an ill athlete is reminded to reconsider racing instead.
+    - tired: hard sessions become easy runs, runs 20% shorter, strength 30 min at most
+    - sore: hard sessions become easy runs, runs 30% shorter, no strength
+    - ill: rest
+    - travelling: hard sessions become easy runs, runs at most 10 km, strength becomes 20 min of bodyweight work
+    """
+    easy = "Conversational effort, keep heart rate low"
+    out: list[Session] = []
+    for x in items:
+        s = Session(**x.__dict__)
+        if s.status != "Planned" or not start <= s.day <= end or feeling not in FEELINGS or feeling == "good":
+            out.append(s)
+            continue
+        why = f"Check-in: {feeling}"
+        if _is_race(s):
+            if feeling == "ill":
+                s.detail = f"{s.detail}. You reported being ill: race only if symptom-free for a day".lstrip(". ")
+                s.adjusted, s.reason = True, why
+            out.append(s)
+            continue
+        s.adjusted, s.reason = True, why
+        if feeling == "ill":
             out.append(
                 Session(
-                    a.day, a.session or "Easy run", half(a.km or 0), a.pace or "", a.detail or "", adjusted=True, reason=a.reason
+                    s.day,
+                    "Rest",
+                    status="Rest",
+                    detail="Rest until you have been symptom-free for a day",
+                    adjusted=True,
+                    reason=why,
                 )
             )
+            continue
+        if s.session == "Strength":
+            if feeling == "sore":
+                continue
+            if feeling == "travelling":
+                s.duration_min, s.detail = 20, "Bodyweight: squats, lunges, calf raises, glute bridges and a plank, 3 rounds"
+            else:
+                s.duration_min = min(s.duration_min or 30, 30)
+            out.append(s)
+            continue
+        if s.session in HARD or s.session.startswith("Easy run + strides"):
+            s.session, s.detail = "Easy run", easy
+        cut = {"tired": 0.8, "sore": 0.7, "travelling": 1.0}[feeling]
+        s.km = half(s.km * cut)
+        if feeling == "travelling":
+            s.km = min(s.km, 10.0)
+            if s.session == "Long run":
+                s.session, s.detail = "Easy run", "Easy, whatever route is available"
+        out.append(s)
     return sorted(out, key=lambda x: (x.day, x.status != "Done"))
 
 
-def check_adjustment(a: Adjustment, week: list[Session], target_km: float, longest_recent: float, today: date) -> str | None:
-    """Guardrails. Returns a reason when the change is not allowed (the model is asked to revise), else None."""
-    if a.action not in ("replace", "shorten", "skip", "move", "strength"):
-        return "action must be replace, shorten, skip, move or strength"
-    if a.day < today:
-        return f"{a.day} is in the past; you can only change today or later"
-    if a.action == "strength":
-        if type(a.duration_min) is not int or not 0 <= a.duration_min <= 60:
-            return "strength duration_min must be a whole number from 0 (remove) to 60"
-        if a.km not in (None, 0) or a.pace or a.move_to:
-            return "strength uses duration_min, not km, pace or move_to"
-        if any(x.day == a.day and x.session == "Strength" and x.status == "Done" for x in week):
-            return "strength training is already recorded on this day"
-        if a.duration_min and not (a.detail or "").strip():
-            return "describe the strength session and its exercises"
-        if a.duration_min and any(x.day == a.day and "race:" in x.session.lower() for x in week):
-            return "do not add strength training on race day"
-        if a.duration_min == 0 and not any(x.day == a.day and x.session == "Strength" and x.status == "Planned" for x in week):
-            return "there is no planned strength session to remove"
-        after = apply_adjustments(week, [a])
-        if sum(x.session == "Strength" and x.status in ("Planned", "Done") for x in after) > 2:
-            return "coach suggestions are limited to two strength sessions per week"
-        return None
-    if a.session == "Strength" or a.duration_min is not None:
-        return "use the strength action for strength sessions"
-    if any(x.day == a.day and x.status == "Done" and x.session != "Strength" for x in week) and a.action != "skip":
-        return f"a workout is already recorded on {a.day}"
-    if a.action in ("shorten", "move") and not _main_planned(week, a.day):
-        return f"there is no planned run on {a.day} to {a.action}"
-    if a.action == "move":
-        if not a.move_to or a.move_to < today:
-            return "move_to must be a future date"
-        if monday(a.move_to) != monday(a.day):
-            return "moves must stay within the same week"
-        if a.move_to == a.day:
-            return "move_to must be a different day"
-        if any(x.day == a.move_to and x.status == "Done" and x.session != "Strength" for x in week):
-            return "a workout is already recorded on the destination day"
-    km = a.km or 0
-    if a.action in ("replace", "shorten"):
-        if not 0 <= km <= 42.5:
-            return "km must be between 0 and 42.5"
-        planned = _main_planned(week, a.day)
-        if a.action == "shorten" and (a.km is None or planned is None or half(km) > planned.km):
-            return "shorten must not increase the planned distance"
-        cap = max(12.0, longest_recent * 1.15)
-        if km > cap:
-            return (
-                f"{km:g} km is more than 15% over the longest recent run ({longest_recent:g} km); "
-                f"keep it at or under {cap:.1f} km"
-            )
-    after = apply_adjustments(week, [a])
-    total = sum(x.km for x in after if x.session != "Strength")
-    limit = target_km * 1.10 + 1
-    if total > limit:
-        return f"this makes the week {total:.1f} km, over the safe limit of {limit:.1f} km (plan {target_km:g} km + 10%)"
-    return None
+def window(sessions: list[Session], start: date, end: date) -> list[Session]:
+    """Planned sessions from start to end (inclusive), in the order they are meant to be done. No rest days."""
+    return sorted((s for s in sessions if s.status == "Planned" and start <= s.day <= end), key=lambda s: s.day)
+
+
+def recent_done(runs: list[Run], today: date, days: int = 7) -> list[Session]:
+    """Everything recorded in the last `days` days, today included, newest first."""
+    start = today - timedelta(days=days - 1)
+    return [
+        Session(
+            a.day,
+            "Strength" if a.type == "Strength" else a.sport,
+            round(a.km, 2) if a.km else 0,
+            f"{fmt_pace(a.pace_s)} /km" if a.pace_s and a.type == "Run" else "",
+            f"{a.duration_s // 60} min" + (f" · avg HR {a.avg_hr}" if a.avg_hr else "") if a.duration_s else "",
+            status="Done",
+            duration_min=a.duration_s // 60 if a.duration_s else None,
+        )
+        for a in sorted(runs, key=lambda r: r.day, reverse=True)
+        if start <= a.day <= today
+    ]
 
 
 # ---- helpers ------------------------------------------------------------------------------------

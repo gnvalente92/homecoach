@@ -167,37 +167,50 @@ def test_endurance_shape():
     assert E.endurance_shape(runs, TODAY, 42.2)["pct"] < s["pct"]
 
 
-def test_apply_adjustments():
-    mon = date(2026, 11, 9)
-    week = [
-        E.Session(mon + timedelta(days=1), "Easy run", 8, "", ""),
-        E.Session(mon + timedelta(days=3), "Key session", 10, "", ""),
-        E.Session(mon + timedelta(days=6), "Long run", 16, "", ""),
-    ]
-    out = E.apply_adjustments(
-        week,
-        [
-            E.Adjustment(mon + timedelta(days=3), "move", move_to=mon + timedelta(days=4), reason="travel"),
-            E.Adjustment(mon + timedelta(days=6), "shorten", km=12, reason="sore calf"),
-            E.Adjustment(mon + timedelta(days=1), "skip", reason="rest"),
-        ],
-    )
-    by = {x.day.weekday(): x for x in out}
-    assert by[4].session == "Key session" and by[4].adjusted and by[3].status == "Rest"
-    assert by[6].km == 12 and by[6].reason == "sore calf" and by[1].status == "Rest"
-    assert week[2].km == 16  # input untouched
+# ---- check-ins and the rolling window --------------------------------------------------------------
+
+WEEK = [
+    E.Session(TODAY - timedelta(days=1), "Run", 8, status="Done"),
+    E.Session(TODAY, "Threshold run", 9, "4:50 /km", "3 × 8 min"),
+    E.Session(TODAY + timedelta(days=1), "Strength", detail="Legs and core", duration_min=45),
+    E.Session(TODAY + timedelta(days=2), "Easy run + strides", 6),
+    E.Session(TODAY + timedelta(days=3), "Long run", 16),
+    E.Session(TODAY + timedelta(days=3), "C race: Parkrun", 5),
+    E.Session(TODAY + timedelta(days=9), "Long run", 18),
+]
 
 
-def test_check_adjustment_guardrails():
-    mon = date(2026, 11, 9)
-    week = [E.Session(mon + timedelta(days=1), "Easy run", 8), E.Session(mon + timedelta(days=6), "Long run", 14)]
-    ok = E.Adjustment(mon + timedelta(days=6), "shorten", km=10, reason="x")
-    assert E.check_adjustment(ok, week, 22, 14, mon) is None
-    too_long = E.Adjustment(mon + timedelta(days=6), "replace", session="Long run", km=25, reason="x")
-    assert "longest recent run" in E.check_adjustment(too_long, week, 22, 14, mon)
-    too_much = E.Adjustment(mon + timedelta(days=3), "replace", session="Easy run", km=12, reason="x")
-    assert "safe limit" in E.check_adjustment(too_much, week, 22, 14, mon)
-    past = E.Adjustment(mon - timedelta(days=1), "skip", reason="x")
-    assert "past" in E.check_adjustment(past, week, 22, 14, mon)
-    cross = E.Adjustment(mon + timedelta(days=6), "move", move_to=mon + timedelta(days=8), reason="x")
-    assert "same week" in E.check_adjustment(cross, week, 22, 14, mon)
+def _by(items):
+    return {(x.day, x.session): x for x in items}
+
+
+def test_tired_softens_hard_sessions_and_cuts_volume():
+    out = E.apply_checkin(WEEK, "tired", TODAY, TODAY + timedelta(days=3))
+    assert [x.session for x in out if x.day == TODAY] == ["Easy run"] and out[1].km == 7.0 and out[1].adjusted
+    assert _by(out)[(TODAY + timedelta(days=1), "Strength")].duration_min == 30
+    assert _by(out)[(TODAY + timedelta(days=3), "Long run")].km == 13.0
+    assert _by(out)[(TODAY + timedelta(days=3), "C race: Parkrun")].km == 5  # races are never changed
+    assert _by(out)[(TODAY + timedelta(days=9), "Long run")].km == 18  # after the check-in ends
+    assert _by(out)[(TODAY - timedelta(days=1), "Run")].status == "Done"
+
+
+def test_sore_drops_strength_ill_rests_and_travelling_caps_runs():
+    sore = E.apply_checkin(WEEK, "sore", TODAY, TODAY + timedelta(days=3))
+    assert not any(x.session == "Strength" for x in sore) and _by(sore)[(TODAY + timedelta(days=3), "Long run")].km == 11.0
+    ill = E.apply_checkin(WEEK, "ill", TODAY, TODAY + timedelta(days=3))
+    assert [x.session for x in ill if x.day == TODAY] == ["Rest"]
+    assert "ill" in _by(ill)[(TODAY + timedelta(days=3), "C race: Parkrun")].detail
+    away = E.apply_checkin(WEEK, "travelling", TODAY, TODAY + timedelta(days=3))
+    long_day = [x for x in away if x.day == TODAY + timedelta(days=3) and not x.session.startswith("C race")]
+    assert long_day[0].session == "Easy run" and long_day[0].km == 10.0
+    assert _by(away)[(TODAY + timedelta(days=1), "Strength")].duration_min == 20
+    assert E.apply_checkin(WEEK, "good", TODAY, TODAY + timedelta(days=3)) == WEEK
+
+
+def test_window_and_recent_done_ignore_weekdays():
+    todo = E.window(WEEK, TODAY, TODAY + timedelta(days=6))
+    assert [x.session for x in todo][:2] == ["Threshold run", "Strength"] and all(x.status == "Planned" for x in todo)
+    assert all(x.day <= TODAY + timedelta(days=6) for x in todo)
+    done = E.recent_done(RUNS, TODAY)
+    assert [x.day for x in done] == [date(2026, 11, 3)]  # 30 Oct to 5 Nov
+    assert done[0].session == "Run" and done[0].km == 12.13 and done[0].pace
