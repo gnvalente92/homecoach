@@ -25,7 +25,8 @@ def test_static_files_stay_inside_build(tmp_path):
     app = FastAPI()
     mount_web(app, root)
     with TestClient(app) as client:
-        assert client.get("/plan").text == "app"
+        page = client.get("/plan")
+        assert page.text == "app" and page.headers["cache-control"] == "no-cache"  # updates show without a hard refresh
         for path in ("/..%2fprivate.txt", "/linked.txt", "/api/missing"):
             assert client.get(path).status_code == 404
 

@@ -20,4 +20,7 @@ def mount_web(app: FastAPI, directory: Path) -> None:
             raise HTTPException(404, "file not found")
         if path == "api" or path.startswith("api/"):
             raise HTTPException(404, "endpoint not found")
-        return FileResponse(candidate if path and candidate.is_file() else root / "index.html")
+        if path and candidate.is_file():
+            return FileResponse(candidate)
+        # Asset names change with each build, but index.html doesn't: revalidate it so an update shows up at once.
+        return FileResponse(root / "index.html", headers={"Cache-Control": "no-cache"})
