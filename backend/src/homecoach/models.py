@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from homecoach.db import Base
@@ -101,55 +101,16 @@ class SyncState(Base):
 
 
 class CheckIn(Base):
-    """Something the athlete told the coach: how they feel, niggles, travel, schedule."""
+    """How the athlete feels (good, tired, sore, ill, travelling) and a note. Until `until`, the latest check-in
+    eases the planned sessions (engine.apply_checkin). Check-ins from before 0007 have no feeling and change nothing."""
 
     __tablename__ = "checkins"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     day: Mapped[date] = mapped_column(Date, index=True)
+    feeling: Mapped[str | None] = mapped_column(String(12))
+    until: Mapped[date | None] = mapped_column(Date)
     text: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class CoachSuggestion(Base):
-    """A change to one day of the plan proposed by the coach. Only 'accepted' ones alter the plan."""
-
-    __tablename__ = "coach_suggestions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    day: Mapped[date] = mapped_column(Date, index=True)
-    action: Mapped[str] = mapped_column(String(10))  # replace | shorten | skip | move
-    session: Mapped[str | None] = mapped_column(String(80))
-    km: Mapped[float | None] = mapped_column(Float)
-    pace: Mapped[str | None] = mapped_column(String(40))
-    detail: Mapped[str | None] = mapped_column(Text)
-    move_to: Mapped[date | None] = mapped_column(Date)
-    duration_min: Mapped[int | None] = mapped_column(Integer)
-    reason: Mapped[str] = mapped_column(Text)
-    source: Mapped[str] = mapped_column(String(10), default="chat")  # chat | review
-    status: Mapped[str] = mapped_column(String(10), default="pending", index=True)  # pending | accepted | dismissed
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class CoachNote(Base):
-    __tablename__ = "coach_notes"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    kind: Mapped[str] = mapped_column(String(10))  # review | chat
-    text: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
-
-
-class RaceInsight(Base):
-    """The coach's reading of the race outlook (one per race per day; regenerated on demand)."""
-
-    __tablename__ = "race_insights"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    race_id: Mapped[int] = mapped_column(Integer, ForeignKey("races.id", ondelete="CASCADE"), index=True)
-    day: Mapped[date] = mapped_column(Date)
-    text: Mapped[str] = mapped_column(Text)
-    facts: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

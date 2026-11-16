@@ -107,21 +107,14 @@ button.link { border: 0; background: none; color: var(--accent); cursor: pointer
 .theme { border: 1px solid var(--line); background: none; color: var(--muted); border-radius: 99px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 
 /* race assistant */
-.chat-log { display: grid; gap: 10px; max-height: 26rem; overflow: auto; padding: 4px 2px 12px; }
-.msg { display: grid; gap: 8px; } .msg.user { justify-items: end; }
-.bubble { max-width: 80ch; padding: 9px 13px; border-radius: 14px; background: var(--panel-2); white-space: pre-wrap; font-size: 14px; }
-.msg.user .bubble { background: var(--accent); color: #fff; }
 .proposal { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
   border: 1px solid var(--line); border-left: 3px solid var(--good); border-radius: 10px; padding: 10px 14px; max-width: 640px; }
-.proposal a, .sources a { color: var(--accent); }
-.sources { font-size: 12px; color: var(--muted); }
-.chat-form { display: flex; gap: 8px; } .chat-form input { flex: 1; }
+.proposal a { color: var(--accent); }
 button:disabled { opacity: .6; cursor: default; }
 
 .pill.adj { background: var(--c5); color: #fff; }
 .adj-reason { color: var(--c5); }
 .coach-note { background: var(--panel-2); border-radius: 10px; padding: 10px 14px; white-space: pre-wrap; font-size: 14px; }
-.proposal.accepted { border-left-color: var(--good); opacity: .75; } .proposal.dismissed { border-left-color: var(--grey); opacity: .55; }
 .proposal { margin-top: 8px; }
 details summary { cursor: pointer; }
 
@@ -166,3 +159,6 @@ details.manual { margin-top: 12px; } details.manual form { margin-top: 10px; }
 .goal-form label.check, label.check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--fg); align-self: end; padding-bottom: 9px; }
 label.check input { width: auto; padding: 0; margin: 0; }
 .nutri-today .contribs { gap: 10px; }
+.handoff textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.handoff-prompt { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; margin-top: 6px; }
+.handoff-step { margin-top: 8px; }

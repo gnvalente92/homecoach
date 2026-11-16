@@ -149,44 +149,6 @@ def _safe(full: bool) -> None:
     _heartbeat()
 
 
-def _outlook_target_race() -> None:
-    """Refresh the AI race outlook for the target race (the one the plan is built around)."""
-    from sqlalchemy import select
-
-    from homecoach import outlook
-    from homecoach.api.main import today
-    from homecoach.db import session_scope
-    from homecoach.models import Race
-    from homecoach.plan import engine as E
-
-    try:
-        with session_scope() as db:
-            rows = list(db.scalars(select(Race).where(Race.day >= today())))
-            tr = E.target_race([E.RaceIn(r.name, r.day, r.distance_km, r.goal_time_s, r.priority, r.id) for r in rows], today())
-            race = next((r for r in rows if tr and r.id == tr.id), None)
-            if race and race.goal_time_s:
-                outlook.interpret(get_settings(), db, race, today(), force=True)
-                log.info("race outlook refreshed for %s", race.name)
-    except Exception:
-        log.exception("race outlook failed")
-
-
-def _weekly_review() -> None:
-    from homecoach import llm
-
-    if not llm.enabled(get_settings()):
-        return
-    try:
-        run_once(False)  # make sure the review sees today's workouts
-        from homecoach.api.main import run_review
-
-        out = run_review()
-        log.info("weekly coach review done: %d suggestion(s)", len(out["suggestions"]))
-        _outlook_target_race()
-    except Exception:
-        log.exception("weekly coach review failed")
-
-
 def main() -> None:
     settings = get_settings()
     sched = BlockingScheduler(timezone=settings.timezone)
@@ -195,16 +157,6 @@ def main() -> None:
         _safe, "interval", minutes=settings.sync_interval_minutes, args=[False], id="incremental", max_instances=1, coalesce=True
     )
     sched.add_job(_safe, "cron", hour=settings.full_sync_hour, minute=17, args=[True], id="full", max_instances=1, coalesce=True)
-    sched.add_job(
-        _weekly_review,
-        "cron",
-        day_of_week=settings.coach_review_dow,
-        hour=settings.coach_review_hour,
-        minute=7,
-        id="coach-review",
-        max_instances=1,
-        coalesce=True,
-    )
     signal.signal(signal.SIGTERM, lambda *_: sched.shutdown(wait=False))
     log.info("collector started: every %d min, full sync at %02d:17", settings.sync_interval_minutes, settings.full_sync_hour)
     _safe(False)  # first run immediately (does a backfill when the database is empty)

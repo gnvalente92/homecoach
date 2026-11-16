@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -123,30 +123,27 @@ def delete_food(fid: int, db: Session = Db) -> None:
     db.delete(x)
 
 
-class ChatBody(BaseModel):
-    messages: list[dict] = Field(min_length=1, max_length=20)
+class PasteBody(BaseModel):
+    text: str = Field(min_length=1, max_length=50_000)
     day: date | None = None
 
 
-@router.post("/chat")
-def chat(body: ChatBody, db: Session = Db) -> dict:
-    """The food chat: the local AI estimates what was eaten and proposes entries; nothing is saved here."""
-    from homecoach import food_assistant, llm
+@router.get("/prompt")
+def food_prompt(request: str = Query("", max_length=1000), day: date | None = None, db: Session = Db) -> dict:
+    """The prompt to copy into Claude, with the day's target and what is already logged."""
+    from homecoach import paste
 
-    s = get_settings()
-    if not llm.enabled(s):
-        raise HTTPException(409, "the local AI is off (set HC_LLM_PROVIDER); add food with the form instead")
-    t = today()
-    d = body.day or t
-    msgs = [
-        {"role": m.get("role"), "content": str(m.get("content", ""))[:2000]}
-        for m in body.messages
-        if m.get("role") in ("user", "assistant")
-    ]
-    if not msgs or msgs[-1]["role"] != "user":
-        raise HTTPException(422, "the last message must be from the user")
+    d = day or today()
     target = next((x for x in overview(db)["days"] if x["day"] == d), None)
+    return {"prompt": paste.food_prompt(request, d, target, nutrition.eaten(db, d, d).get(d))}
+
+
+@router.post("/import")
+def food_import(body: PasteBody) -> dict:
+    """Check Claude's answer and return the meals as proposals; nothing is saved here."""
+    from homecoach import paste
+
     try:
-        return food_assistant.chat(s, msgs, t, d, target, nutrition.eaten(db, d, d).get(d))
-    except llm.LLMError as e:
-        raise HTTPException(502, str(e)) from e
+        return {"proposals": paste.parse_food(body.text, today(), body.day or today())}
+    except paste.PasteError as e:
+        raise HTTPException(422, str(e)) from e

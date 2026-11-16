@@ -1,11 +1,9 @@
-"""Nutrition: targets from training, profile import, food log and the food chat. All data is synthetic."""
+"""Nutrition: targets from training, profile import, food log and the Claude hand-off. All data is synthetic."""
 
 import json
 from datetime import UTC, date, datetime, timedelta
 
-import httpx
 import pytest
-import respx
 
 from homecoach import nutrition
 from homecoach.api import main as api
@@ -16,7 +14,6 @@ from homecoach.providers.coros_mcp import parse_profile
 
 D = date(2026, 11, 6)  # a Friday
 P = N.Profile(weight_kg=70, height_cm=178, birth_date=date(1990, 3, 10), sex="male")
-LLM = "http://llm.test/v1/chat/completions"
 
 
 # ---- rules -----------------------------------------------------------------------------------------
@@ -160,43 +157,27 @@ def test_food_log_add_list_delete_and_totals(fed):
     assert [x["name"] for x in fed.get("/api/nutrition/food?day=2026-11-06").json()] == ["Banana"]
 
 
-# ---- food chat -------------------------------------------------------------------------------------
+# ---- food via Claude ---------------------------------------------------------------------------------
 
 
-def _tc(args, i):
-    call = {"id": i, "type": "function", "function": {"name": "propose_food", "arguments": json.dumps(args)}}
-    return {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [call]}}]}
-
-
-@respx.mock
-def test_food_chat_proposes_after_fixing_inconsistent_numbers(fed, monkeypatch):
-    assert fed.post("/api/nutrition/chat", json={"messages": [{"role": "user", "content": "2 eggs"}]}).status_code == 409
-    s = api.get_settings()
-    monkeypatch.setattr(s, "llm_provider", "openai")
-    monkeypatch.setattr(s, "llm_base_url", "http://llm.test/v1")
+def test_food_prompt_and_import_check_the_numbers(fed):
     fed.put("/api/nutrition/profile", json={"weight_kg": 70, "height_cm": 178, "birth_date": "1990-03-10", "sex": "male"})
+    prompt = fed.get("/api/nutrition/prompt", params={"request": "2 eggs and 2 toasts"}).json()["prompt"]
+    assert "2 eggs and 2 toasts" in prompt and "2026-11-06" in prompt and "126 g" in prompt and "nothing logged yet" in prompt
     eggs = {"name": "Scrambled eggs", "quantity": "2 eggs", "kcal": 150, "protein_g": 12, "carbs_g": 1, "fat_g": 10}
     toast = {"name": "Wholemeal toast", "quantity": "2 slices", "kcal": 400, "protein_g": 8, "carbs_g": 32, "fat_g": 3}
-    llm = respx.post(LLM).mock(
-        side_effect=[
-            httpx.Response(200, json=_tc({"meal": "breakfast", "items": [eggs, toast]}, "c1")),  # toast kcal is off
-            httpx.Response(200, json=_tc({"meal": "breakfast", "items": [eggs, {**toast, "kcal": 190}]}, "c2")),
-            httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "About 340 kcal."}}]}),
-        ]
-    )
-    out = fed.post("/api/nutrition/chat", json={"messages": [{"role": "user", "content": "2 eggs and 2 toasts"}]}).json()
-    assert out["reply"] == "About 340 kcal." and len(out["proposals"]) == 1
-    p = out["proposals"][0]
+    answer = '```json\n{"meals": [{"meal": "breakfast", "items": [%s, %s]}]}\n```\nAbout 340 kcal.'
+    bad = fed.post("/api/nutrition/import", json={"text": answer % (json.dumps(eggs), json.dumps(toast))})
+    assert bad.status_code == 422 and "doesn't match the macros" in bad.json()["detail"]
+    ok = fed.post("/api/nutrition/import", json={"text": answer % (json.dumps(eggs), json.dumps({**toast, "kcal": 190}))})
+    p = ok.json()["proposals"][0]
     assert p["meal"] == "breakfast" and p["day"] == "2026-11-06" and p["total"]["kcal"] == 340
-    second = json.loads(llm.calls[1].request.content)
-    assert "doesn't match the macros" in second["messages"][-1]["content"]  # the model was told why
-    system = json.loads(llm.calls[0].request.content)["messages"][0]["content"]
-    assert "Target for that day:" in system and "126 g" in system and "Logged so far: nothing logged yet" in system
+    assert fed.post("/api/nutrition/import", json={"text": "no json here"}).status_code == 422
     assert fed.get("/api/nutrition/food").json() == []  # nothing saved until the user confirms
 
 
 def test_alcohol_may_exceed_the_macros():
-    from homecoach.food_assistant import check_item
+    from homecoach.paste import check_item
 
     beer = check_item({"name": "Beer", "quantity": "330 ml", "kcal": 145, "protein_g": 1.5, "carbs_g": 13, "fat_g": 0})
     assert beer["kcal"] == 145

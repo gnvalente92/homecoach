@@ -18,11 +18,9 @@ The shared file lock permits one sync at a time across containers. A duplicate r
 that it could not run rather than claiming completion. After a failure, imported activity writes roll back while any
 rotated COROS token is retained, unless the account was disconnected or changed meanwhile.
 
-Full resync runs data sync, plan calculation, a fresh coach review and AI race outlooks in that order. `/api/resync`
-reports each stage as pending, running, completed, failed or skipped. AI-disabled runs still rebuild the plan. A failed
-coach review retains previous pending recommendations and reports a partial result; it does not undo the completed data
-sync. Successful reviews replace pending suggestions, including chat suggestions, while retaining accepted/dismissed
-decisions, check-ins and review history. A separate shared lock prevents simultaneous scheduled and manual coach reviews.
+Full resync runs a full data sync, then rebuilds the plan. `/api/resync` reports each stage (`sync`, `plan`) as pending,
+running, completed, failed or skipped. Races and check-ins are kept. The app makes no calls to an AI model: race and food
+estimates come from prompts you copy into Claude yourself, and their answers are validated before anything is saved.
 
 ## Back up and verify
 

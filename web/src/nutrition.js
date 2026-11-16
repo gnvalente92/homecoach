@@ -1,11 +1,13 @@
-// Nutrition: daily targets from training, today's food log and the food chat.
+// Nutrition: daily targets from training, today's food log and food estimates from Claude.
+import { claudeHandoff } from './handoff.js';
+
 export function nutritionPages({ api, h, show, card, resetCache }) {
   const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
   const LOAD = { Rest: 'var(--grey)', Light: 'var(--c6)', Moderate: 'var(--c1)', High: 'var(--c2)', 'Carb loading': 'var(--c5)', Race: 'var(--c4)' };
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const fmtDay = (iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, opts);
   const n = (v) => Math.round(v).toLocaleString();
-  const state = { week: 0, chat: [], day: null };
+  const state = { week: 0, day: null };
 
   const loadPill = (load) => h('span', { class: 'load-pill', style: `--lc:${LOAD[load] || 'var(--grey)'}` }, load);
 
@@ -70,22 +72,20 @@ export function nutritionPages({ api, h, show, card, resetCache }) {
     return MEALS.filter((m) => entries.some((x) => x.meal === m)).map((m) => h('div', { class: 'meal' },
       h('div', { class: 'label' }, cap(m)),
       entries.filter((x) => x.meal === m).map((x) => h('div', { class: 'food-row' },
-        h('div', {}, h('div', {}, x.name, x.quantity ? h('span', { class: 'muted' }, ` · ${x.quantity}`) : null, x.source === 'ai' ? h('span', { class: 'pill adj', style: 'margin-left:6px' }, 'AI estimate') : null),
+        h('div', {}, h('div', {}, x.name, x.quantity ? h('span', { class: 'muted' }, ` · ${x.quantity}`) : null, x.source === 'ai' ? h('span', { class: 'pill adj', style: 'margin-left:6px' }, 'Estimate') : null),
           h('div', { class: 'note', style: 'margin:0' }, `${n(x.kcal)} kcal · ${x.carbs_g} g carbs · ${x.protein_g} g protein · ${x.fat_g} g fat`)),
         h('button', { class: 'link', title: 'Remove', onclick: async () => { await api(`/nutrition/food/${x.id}`, { method: 'DELETE' }); resetCache(); refresh(); } }, 'Remove')))));
   }
 
-  function chatCard(llm, day, refresh) {
-    const log = h('div', { class: 'chat-log' });
+  function claudeCard(day, refresh) {
     const proposalCard = (p) => {
       const btn = h('button', { class: 'primary', onclick: async () => {
         btn.disabled = true;
         try {
           await api('/nutrition/food', { method: 'POST', body: JSON.stringify({ day: p.day, meal: p.meal, items: p.items, source: 'ai' }) });
-          p.saved = true; resetCache(); refresh();
+          resetCache(); refresh();
         } catch (e) { btn.disabled = false; btn.textContent = `Failed: ${e.message}`; }
-      } }, p.saved ? 'Added ✓' : 'Add to log');
-      if (p.saved) btn.disabled = true;
+      } }, 'Add to log');
       return h('div', { class: 'proposal' },
         h('div', {}, h('div', { class: 'next-name' }, `${cap(p.meal)} · ${p.total.kcal} kcal`),
           h('div', { class: 'note', style: 'margin:2px 0' }, `${p.total.carbs_g} g carbs · ${p.total.protein_g} g protein · ${p.total.fat_g} g fat${p.day !== day ? ` · ${fmtDay(p.day)}` : ''}`),
@@ -93,28 +93,8 @@ export function nutritionPages({ api, h, show, card, resetCache }) {
           p.assumptions ? h('div', { class: 'note', style: 'margin:0' }, `Assumed: ${p.assumptions}`) : null),
         btn);
     };
-    const render = () => {
-      log.replaceChildren(...state.chat.map((m) => h('div', { class: `msg ${m.role}` }, h('div', { class: 'bubble' }, m.content), ...(m.proposals || []).map(proposalCard))));
-      log.scrollTop = log.scrollHeight;
-    };
-    const input = h('input', { placeholder: llm.enabled ? 'e.g. “porridge with a banana and a coffee with milk”' : 'Food chat needs the local AI', disabled: llm.enabled ? null : '' });
-    const send = h('button', { class: 'primary', type: 'submit', disabled: llm.enabled ? null : '' }, 'Send');
-    const form = h('form', { class: 'chat-form', onsubmit: async (e) => {
-      e.preventDefault();
-      const text = input.value.trim(); if (!text) return;
-      state.chat.push({ role: 'user', content: text }); input.value = ''; send.disabled = true;
-      state.chat.push({ role: 'assistant', content: 'Estimating… (a local model can take a minute)', pending: true }); render();
-      try {
-        const out = await api('/nutrition/chat', { method: 'POST', body: JSON.stringify({ day, messages: state.chat.filter((m) => !m.pending).slice(-10).map(({ role, content }) => ({ role, content })) }) });
-        state.chat.pop(); state.chat.push({ role: 'assistant', content: out.reply, proposals: out.proposals });
-      } catch (err) { state.chat.pop(); state.chat.push({ role: 'assistant', content: `Sorry — ${err.message}` }); }
-      send.disabled = false; render(); input.focus();
-    } }, input, send);
-    if (!state.chat.length) state.chat.push({ role: 'assistant', content: llm.enabled
-      ? 'Tell me what you ate and I’ll estimate it. You confirm before anything is logged. You can also ask what to eat with what’s left today.'
-      : 'The food chat needs the local AI (HC_LLM_PROVIDER, see the README). You can still add food by hand below.' });
-    render();
-    return [log, form];
+    return claudeHandoff({ h, api, promptPath: '/nutrition/prompt', importPath: '/nutrition/import', extra: { day }, renderProposal: proposalCard,
+      placeholder: 'e.g. porridge with a banana and a coffee with milk' });
   }
 
   function manualForm(day, refresh) {
@@ -138,7 +118,7 @@ export function nutritionPages({ api, h, show, card, resetCache }) {
   }
 
   async function nutrition() {
-    const [o, llm] = await Promise.all([api('/nutrition'), api('/assistant').catch(() => ({ enabled: false }))]);
+    const o = await api('/nutrition');
     const p = o.profile;
     const intro = h('p', { class: 'lede' }, 'Daily targets from your training: carbs follow the load, protein stays steady, fat fills the rest. Estimates for healthy adults in training, not medical advice.');
     if (p.missing.length) {
@@ -157,7 +137,7 @@ export function nutritionPages({ api, h, show, card, resetCache }) {
       h('button', { class: 'link', onclick: (e) => { e.currentTarget.replaceWith(...profileForm(p, nutrition)); } }, 'Edit'));
     show(h('h1', {}, 'Nutrition'), intro,
       h('div', { class: 'hero' }, todayCard(t),
-        card('What I ate today', 'Tell the chat or add by hand. AI amounts are estimates: check the card before adding.', [foodList(entries, nutrition), chatCard(llm, today, nutrition), manualForm(today, nutrition)].flat(2))),
+        card('What I ate today', 'Ask Claude for an estimate or add food by hand. Check Claude’s numbers before adding.', [foodList(entries, nutrition), claudeCard(today, nutrition), manualForm(today, nutrition)].flat(2))),
       h('h2', {}, 'Day by day'),
       h('div', { class: 'row' }, seg, h('span', { class: 'note', style: 'margin:0' }, `Average ${avg('kcal').toLocaleString()} kcal · ${avg('carbs_g')} g carbs · ${avg('protein_g')} g protein · ${avg('fat_g')} g fat a day`)),
       h('div', { class: 'sessions' }, weeks[state.week].map((d) => dayCard(d, today))),

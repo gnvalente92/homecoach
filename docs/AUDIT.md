@@ -1,5 +1,8 @@
 # Homecoach review — 5 November 2026
 
+> Partly superseded on 16 November 2026: the coach, race assistant, AI race outlooks and food chat described here were
+> replaced by rules and a Claude copy-and-paste flow. See [Feature choices](FEATURES.md#rules-instead-of-a-model).
+
 Homecoach is an active, personal training application: a FastAPI service and collector, a Vite frontend, Postgres and
 Docker Compose deployment. Its operator is the owner of the host. The existing provider-neutral model, pure planning
 engine and explicit acceptance of AI suggestions are useful foundations; no architecture rewrite was needed.

@@ -1,11 +1,8 @@
-"""Race outlook: rule facts and the AI interpretation."""
+"""Race outlook: rule facts and the rule-written summary."""
 
-import json
 from datetime import date, timedelta
 
-import httpx
-import respx
-
+from homecoach import outlook
 from homecoach.api import main as api
 from homecoach.collector.sync import upsert_fitness
 from homecoach.plan import engine as E
@@ -53,9 +50,23 @@ def test_outlook_facts():
     assert E.race_outlook(E.RaceIn("Fun run", T + timedelta(days=7), 5), runs, T)["verdict"] is None
 
 
-@respx.mock
-def test_outlook_endpoints(client, monkeypatch):
-    s = api.get_settings()
+def test_summary_reads_the_facts():
+    runs = [E.Run(T - timedelta(days=3), 10, 3000)]
+    race = E.RaceIn("City 10K", T + timedelta(days=28), 10, 2950, "A", 1)
+    o = outlook.summary(E.race_outlook(race, runs, T, {"10k": 3000}))
+    assert "50:00" in o["text"] and "0:50 (1.7%) slower than your goal of 49:10" in o["text"]
+    assert "usually closes a gap of that size" in o["text"]  # 4 weeks x 0.5% covers 1.7%
+    assert "Extend the long run towards 14 km." in o["focus"] and 1 <= len(o["focus"]) <= 3
+    far = outlook.summary(E.race_outlook(E.RaceIn("City 10K", T + timedelta(days=28), 10, 2700), runs, T, {"10k": 3000}))
+    assert "more than training usually closes" in far["text"] and "a goal around 49:00" in far["text"]
+    fast = outlook.summary(E.race_outlook(E.RaceIn("City 10K", T + timedelta(days=7), 10, 3100), runs, T, {"10k": 3000}))
+    assert "faster than your goal" in fast["text"] and fast["focus"][0].startswith("Taper")
+    none = outlook.summary(E.race_outlook(E.RaceIn("City 10K", T + timedelta(days=21), 10, 2950), [], T))
+    assert none["text"].startswith("There's no estimate yet")
+    assert outlook.summary(E.race_outlook(E.RaceIn("Fun run", T + timedelta(days=7), 5), runs, T)) is None
+
+
+def test_outlook_endpoint(client):
     rid = client.post(
         "/api/races",
         json={"name": "City 10K", "date": str(api.today() + timedelta(days=28)), "distance_km": 10, "goal_time": "49:00"},
@@ -64,24 +75,8 @@ def test_outlook_endpoints(client, monkeypatch):
     upsert_fitness(db, FitnessRecord(day=api.today(), vo2max=50, predictions={"10k": 2990, "half": 6600}))
     db.commit()
 
-    out = client.get("/api/races/outlook").json()
-    assert out["llm"] is False and out["races"][0]["verdict"] == "Within reach" and out["races"][0]["insight"] is None
+    out = client.get("/api/races/outlook").json()["races"][0]
+    assert out["verdict"] == "Within reach" and "49:50" in out["summary"]["text"] and out["summary"]["focus"]
     assert client.get("/api/summary").json()["predictions"]["10k"] == "49:50"
-    assert client.post(f"/api/races/{rid}/outlook").status_code == 409
-
-    monkeypatch.setattr(s, "llm_provider", "openai")
-    monkeypatch.setattr(s, "llm_base_url", "http://llm.test/v1")
-    reply = "You're about 1 minute off.\nFocus:\n- One tempo a week"
-    llm = respx.post("http://llm.test/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": reply}}]})
-    )
-    r = client.post(f"/api/races/{rid}/outlook", json={}).json()
-    assert r["insight"]["text"] == reply and r["insight"]["today"] is True
-    sent = json.loads(llm.calls[0].request.content)
-    assert "tools" not in sent and "Goal: 49:00 = 4:54 /km" in sent["messages"][0]["content"]
-    client.post(f"/api/races/{rid}/outlook", json={})  # cached for the day
-    assert llm.call_count == 1
-    client.post(f"/api/races/{rid}/outlook", json={"force": True})
-    assert llm.call_count == 2
     assert client.delete(f"/api/races/{rid}").status_code == 204
     assert client.get("/api/races/outlook").json()["races"] == []

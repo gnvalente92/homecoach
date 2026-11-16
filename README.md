@@ -2,31 +2,35 @@
 
 **Your own training coach, running on your own server.** homecoach pulls your watch data (COROS today, more to come),
 keeps it in your own database, and turns your race calendar into a week-by-week plan that adapts to how you're actually
-doing. It's built for TrueNAS SCALE and runs on any Docker host. Data is stored on your server; optional AI can use a local model or a remote service you configure.
+doing. It's built for TrueNAS SCALE and runs on any Docker host. Data is stored on your server, and every recommendation
+comes from fixed rules; the app never calls an AI model.
 
 ![Today: readiness, today's session, this week, form and the next race](docs/screenshots/today.png)
 
 ## What it does
 
 - **Today**: a 0–100 readiness score with what's driving it (training load, overnight HRV, resting HR, sleep), each
-  compared with *your* normal range. Below that: today's session and what's next, how much of the week you've done, your
+  compared with *your* normal range. Below that: the next sessions to do, how much you ran in the last 7 days, your
   form, and a countdown to your next race, with an "endurance shape" showing whether your training volume is enough for
   that distance.
-- **Training plan**: this week and next week, built around your race calendar. It moves through base, build, peak and
-  taper phases, and A, B and C races each shape the plan differently. A road-to-race-day chart shows the weeks you've
-  actually run followed by the planned ones.
-- **Coach** (optional, local AI): tell it "calf is sore", "travelling Thu–Sat" or "tempo felt easy" and it suggests
-  day-by-day changes within safe limits. You accept or dismiss each one. It also reviews your week every Sunday.
-- **Race assistant** (optional, local AI): "Add Corrida do Sporting, I want 49 minutes". It searches the web, reads the
-  official page and shows you a race card. Nothing is saved until you click Add.
+- **Training plan**: a to-do list of the sessions for the next 7 days, in order but not tied to weekdays, and everything
+  you did in the last 7 days. The plan is built around your race calendar: it moves through base, build, peak and taper
+  phases, and A, B and C races each shape it differently. A road-to-race-day chart shows the weeks you've actually run
+  followed by the planned ones.
+- **Check-in**: tell the plan you feel good, tired, sore, ill or travelling. Fixed rules ease the next few days, for
+  example *sore* turns hard sessions into easy runs, cuts runs by 30% and drops strength. Races are never changed.
+- **Add a race with Claude**: describe the race ("Lisbon Half, goal 1:45:00"), copy the prompt the app writes into
+  Claude with web search on, and paste Claude's JSON answer back. The app checks it and shows a race card. Nothing is
+  saved until you click Add.
 - **Am I on track?** For every race with a goal time: your goal pace against the watch's race prediction, your best
   recent run converted to the race distance, kilometres run at goal pace in the last 4 weeks and your endurance shape,
-  with a verdict (*on track*, *within reach*, *stretch* or *ambitious*). The local AI can explain it in plain words and
-  suggest two or three things to focus on.
+  with a verdict (*on track*, *within reach*, *stretch* or *ambitious*), a short written reading and up to three focus
+  points, all from rules.
 - **Nutrition**: calories, carbs, protein, fat and fluids for every day of this week and next, worked out from that day's
   training. Carbs follow the load (rest day, easy run, key session, long run, carb loading before a half or marathon, race
-  day), protein stays steady and fat fills the rest. Tell the food chat (local AI) what you ate and it estimates it; nothing
-  is logged until you confirm. Your weight, height, birthday and sex come from COROS, or you enter them once.
+  day), protein stays steady and fat fills the rest. To log a meal, describe it, copy the prompt into Claude and paste
+  its answer back; the app checks that the calories match the macros, and nothing is logged until you confirm. You can
+  also add food by hand. Your weight, height, birthday and sex come from COROS, or you enter them once.
 - **Overview, Trends and Recovery**: totals compared with the previous period, a fitness / fatigue / form chart, pace vs
   heart rate, running efficiency, activity and step calendars, sleep stages, HRV and resting HR against your baseline,
   and stress.
@@ -38,9 +42,7 @@ doing. It's built for TrueNAS SCALE and runs on any Docker host. Data is stored 
 - **Grafana** (optional), pointed at the same database for your own analysis.
 
 Pages load instantly because they read from the local database. A collector keeps it up to date every 10 minutes, and
-**↻ Full resync** (top right) re-reads your whole history, rebuilds the plan and runs a fresh coach review and race
-outlooks when AI is enabled. A successful review replaces pending recommendations; accepted changes and check-ins remain.
-If the model fails, previous recommendations remain and the completion message reports which refresh failed.
+**↻ Full resync** (top right) re-reads your whole history and rebuilds the plan. Races and check-ins are kept.
 
 See [feature choices](docs/FEATURES.md) for the comparison with other training apps, and [the audit](docs/AUDIT.md) for
 fixes and verification limits.
@@ -49,26 +51,17 @@ fixes and verification limits.
 
 <sub>Synthetic demo data: “Alex”, building towards a half marathon, with a tune-up 10K and a parkrun on the way. Regenerate it with `backend/scripts/seed_demo.py`.</sub>
 
-| Training plan and coach | Races and race assistant |
+| Races | Overview |
 |---|---|
-| ![Coach suggesting a change after a check-in](docs/screenshots/coach.png) | ![Race assistant proposing a race to add](docs/screenshots/race-assistant.png) |
-| ![Accepted change shown with a coach badge](docs/screenshots/coach-accepted.png) | ![Race calendar with A/B/C priorities](docs/screenshots/races.png) |
+| ![Race calendar with A/B/C priorities](docs/screenshots/races.png) | ![Headline totals with change vs previous period, and week-by-week charts](docs/screenshots/overview.png) |
 
-| Overview | Trends |
+| Trends | Recovery |
 |---|---|
-| ![Headline totals with change vs previous period, and week-by-week charts](docs/screenshots/overview.png) | ![Fitness, fatigue and form chart and training charts](docs/screenshots/trends.png) |
-
-| Recovery | Training plan |
-|---|---|
-| ![Sleep stages, HRV and resting HR against baselines](docs/screenshots/recovery.png) | ![This week's sessions and the coach panel](docs/screenshots/plan.png) |
+| ![Fitness, fatigue and form chart and training charts](docs/screenshots/trends.png) | ![Sleep stages, HRV and resting HR against baselines](docs/screenshots/recovery.png) |
 
 **Nutrition**
 
-![Daily nutrition targets from training, today's food log and the food chat](docs/screenshots/nutrition.png)
-
-**Am I on track?**
-
-![Race outlook: goal pace vs prediction and recent runs, with the coach's reading](docs/screenshots/race-outlook.png)
+![Daily nutrition targets from training and today's food log](docs/screenshots/nutrition.png)
 
 | Light theme | Mobile |
 |---|---|
@@ -126,6 +119,18 @@ Providers live in `backend/src/homecoach/providers/` and map vendor data into on
   - **C races** take the place of that week's hard session.
 - Paces come from your goal time when one is set, otherwise from the threshold pace (taken from the provider, set with
   `HC_THRESHOLD_PACE`, or estimated from your recent runs).
+- **Check-ins** change planned sessions from today until the check-in ends (default: tired 2 days, sore, ill and
+  travelling 3 days, or 1 to 14 days you choose). The newest check-in replaces older ones, and *good* ends them early.
+
+  | Feeling | Rule |
+  |---|---|
+  | Tired | Hard sessions become easy runs, runs 20% shorter, strength 30 min at most |
+  | Sore | Hard sessions become easy runs, runs 30% shorter, no strength |
+  | Ill | Rest; a race stays, with a reminder to race only after a symptom-free day |
+  | Travelling | Hard sessions become easy runs, runs at most 10 km, 20 min of bodyweight strength |
+- **Race outlook reading**: consistent training is taken to close about 0.5% of race time a week, at most 3% before a
+  race. A bigger gap gets a suggested goal; the focus points come from endurance shape, long-run length, time at goal
+  pace and whether the taper has started.
 
 The rules are simple and transparent. This is not a coach.
 
@@ -134,11 +139,11 @@ The rules are simple and transparent. This is not a coach.
 The repo is cloned onto the NAS, your settings live in a `.env` file **outside** the repo, and a TrueNAS custom app
 *includes* the compose file. Updating then comes down to `git pull` plus restarting the app.
 
-1. **Datasets.** Create `tank/apps/homecoach` (preset **Apps**) with child datasets `postgres`, `data`, `backups`
-   and `grafana`. Replace `tank` with your pool name throughout.
+1. **Datasets.** Create `p_vault/ds_apps/homecoach` (preset **Apps**) with child datasets `postgres`, `data`, `backups`
+   and `grafana`. Replace `p_vault/ds_apps` with your own pool and parent dataset throughout.
 2. **Files and permissions** (System → Shell):
    ```sh
-   cd /mnt/tank/apps/homecoach
+   cd /mnt/p_vault/ds_apps/homecoach
    sudo git clone https://github.com/gnvalente92/homecoach src
    sudo cp src/.env.example .env && sudo chmod 600 .env && sudo nano .env
    sudo chown -R 10001:10001 data      # app user inside the container
@@ -148,84 +153,31 @@ The repo is cloned onto the NAS, your settings live in a `.env` file **outside**
    ```yaml
    include:
      - path:
-         - /mnt/tank/apps/homecoach/src/docker-compose.yml
-         - /mnt/tank/apps/homecoach/src/docker-compose.grafana.yml   # remove this line if you don't want Grafana
-       env_file: /mnt/tank/apps/homecoach/.env
+         - /mnt/p_vault/ds_apps/homecoach/src/docker-compose.yml
+         - /mnt/p_vault/ds_apps/homecoach/src/docker-compose.grafana.yml   # remove this line if you don't want Grafana
+       env_file: /mnt/p_vault/ds_apps/homecoach/.env
    ```
 4. Open `http://<nas>:8742`, and Grafana at `http://<nas>:3742` if you included it. Click **Connect COROS** in the banner
    and sign in with COROS. The first sync then backfills your history.
 
-**Update:** run `cd /mnt/tank/apps/homecoach/src && sudo git pull && sudo docker pull ghcr.io/gnvalente92/homecoach:latest`,
-then **Stop** and **Start** the app.
+### Update to the latest version
+
+1. In **System → Shell**, run:
+   ```sh
+   cd /mnt/p_vault/ds_apps/homecoach/src && sudo git pull && sudo docker pull ghcr.io/gnvalente92/homecoach:latest
+   ```
+2. In **Apps → homecoach**, click **Stop**, wait until it has stopped, then click **Start**. The web container applies
+   any database migrations when it starts.
+
+**Upgrading from a version with the local AI:** `docker-compose.llm.yml` and the `searxng/` folder no longer exist. Before
+step 2, edit the app (**Apps → homecoach → Edit**) and remove the `docker-compose.llm.yml` line from its `include` list,
+or the app won't start. The `HC_LLM_*`, `HC_OLLAMA_*`, `HC_SEARXNG_URL`, `SEARXNG_SECRET` and `HC_COACH_REVIEW_*`
+lines in `.env` are ignored and can be deleted, as can the `ollama` dataset. Migration 0007 deletes the stored coach
+suggestions, coach notes and AI race readings; older check-ins remain as notes.
 
 For backup checks, restore instructions and recovery steps, see [Operations](docs/OPERATIONS.md).
 
 On any other Docker host: `docker compose --env-file .env -f docker-compose.yml [-f docker-compose.grafana.yml] up -d`.
-
-## Optional: local AI (race assistant and coach)
-
-Both features run fully on your own server, with no API costs, using **Ollama** for the model and **SearXNG**
-for web search. They're off until you enable them.
-
-- **Race outlook** (Races page): "Ask the coach to explain" turns the on-track facts into a short reading and 2–3 focus
-  points. It's cached for the day and refreshed for your target race with the Sunday review.
-
-- **Race assistant** (Races page): type something like "add Corrida do Sporting, I want 49 minutes". It searches the web,
-  reads the official page and shows a race card. **Nothing is saved until you click Add.**
-- **Coach** (Training plan page): the rule engine still builds the plan. The coach reads how training is actually going
-  (the last 8 weeks, this week so far, readiness, and your check-ins such as "calf is sore" or "travelling Thu–Sat")
-  and suggests day-by-day changes: replace, shorten, skip, or move within the week. Each suggestion has a reason, and you
-  **Accept** or **Dismiss** it. Guardrails reject anything that pushes a week more than 10% over the plan, or a run more
-  than 15% over your longest recent run; the model is told why and asked to revise. A review runs automatically every
-  Sunday at 19:00, and there's also a "Review my week now" button.
-
-The coach also reviews strength training. It can recommend a session with its duration, exercises and reason, update a
-planned strength session, or remove one when recovery or your schedule calls for it. Accepted strength work appears
-alongside any run on that day; it never replaces the run or adds kilometres to running totals. Application limits allow
-up to two strength sessions per week, at most 60 minutes each, and block race-day additions or changes to completed
-strength workouts. These limits do not assess whether an exercise or load suits you. Tell the coach about your experience,
-equipment and restrictions; recommendations remain pending until accepted.
-
-**Enable on TrueNAS**
-
-1. Create a dataset `…/homecoach/ollama` (preset Apps) for the model files.
-2. In `.env`, set:
-   ```ini
-   HC_LLM_PROVIDER=openai
-   HC_LLM_MODEL=qwen2.5:3b
-   HC_OLLAMA_PATH=/mnt/<pool>/<path>/homecoach/ollama
-   SEARXNG_SECRET=<a random string>
-   ```
-3. Add `docker-compose.llm.yml` to the app's `include` list (see `deploy/truenas-app.yaml`), then Stop and Start the app.
-   The `ollama-pull` container downloads the model (about 2 GB) once and then exits.
-4. Check everything works: `sudo docker exec ix-homecoach-web-1 homecoach llm-check`
-
-**Model choice** (CPU-only works; Ollama can't use Intel iGPUs). On a CPU, speed depends on how many parameters the
-model uses for each word, not how big it is. *Mixture-of-experts* (MoE) models keep a large model in RAM but use only a
-few billion parameters per word, so they trade memory for much better answers at about the speed of a small model:
-
-| Model | RAM | Used per word | Notes |
-|---|---|---|---|
-| `qwen2.5:3b` | ~2.5 GB | 3B | Default; fast, but makes the most mistakes |
-| `gpt-oss:20b` | ~14 GB | 3.6B (MoE) | Strong tool calling; good middle ground |
-| `qwen3:30b-a3b` | ~19 GB | 3B (MoE) | Best quality here |
-
-`HC_LLM_REASONING=low` (the default) keeps these models' "thinking" short, which saves a lot of CPU time per request.
-`HC_OLLAMA_CPUS` (default 4) caps the cores Ollama uses so the NAS stays responsive.
-
-On TrueNAS, the ZFS cache (ARC) uses most free RAM. It gives memory back when apps need it, but slowly, so a 14–19 GB model
-can make the first load slow or fail. Cap the ARC with an *Init/Shutdown script* (System → Advanced → Init/Shutdown
-Scripts, type *Command*, when *Post Init*), for example 8 GiB:
-
-```sh
-echo 8589934592 > /sys/module/zfs/parameters/zfs_arc_max
-```
-
-Any OpenAI-compatible server works (llama.cpp, LM Studio, vLLM, a remote box with a GPU): point `HC_LLM_BASE_URL` at it.
-`HC_LLM_PROVIDER=anthropic` with `HC_LLM_API_KEY` uses the Claude API instead, which is paid.
-
-Small local models make mistakes. That's why every race and plan change needs your confirmation, and why the rules,
-not the model, set your training load.
 
 ## Configuration
 
@@ -240,7 +192,6 @@ The most common ones:
 | `HC_SYNC_INTERVAL_MINUTES` | `10` | Incremental sync frequency |
 | `HC_THRESHOLD_PACE` | – | Override, e.g. `4:50` |
 | `HC_ATHLETE_NAME` | `Athlete` | Used in the greeting and headlines |
-| `HC_LLM_PROVIDER` / `HC_LLM_MODEL` | `none` / `qwen2.5:3b` | Local AI, see above |
 | `HC_AUTH_USER` / `HC_AUTH_PASSWORD` | – | Optional basic-auth login for the web app. The app is otherwise open to your network, so set this, or put it behind a reverse proxy, if it's reachable beyond your LAN |
 
 ## Development
@@ -270,10 +221,9 @@ locally as well.
 ## Privacy
 
 Keep credentials in `.env`; activities, races, check-ins and health metrics are stored in Postgres and the FIT archive.
-The collector calls the configured activity provider. Optional AI sends training context and your messages to the
-configured model endpoint: a remote endpoint receives that data. Race lookup sends queries to SearXNG, whose search
-engines receive those queries, and reads public race pages. The page reader rejects private network addresses and checks
-redirects. The application does not require a Strava account.
+The collector calls the configured activity provider; nothing else leaves the server. The race and food prompts are
+copied by you: whatever you paste into Claude (your race calendar, or the day's nutrition target and what you've eaten)
+goes to Claude under your own account. The application does not require a Strava account.
 
 ## License
 

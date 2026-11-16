@@ -3,6 +3,7 @@ import * as d3 from 'd3';
 import { timeChart, scatter, parse, fInt, f1, fDay, color, css } from './charts.js';
 import { trainingPages } from './training.js';
 import { nutritionPages } from './nutrition.js';
+import { claudeHandoff } from './handoff.js';
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $('#view');
@@ -49,17 +50,19 @@ const resetCache = () => { state.cache = {}; };
 
 // ---- common pieces ----------------------------------------------------------------------------
 
-function sessionsGrid(list, todayIso) {
+// Sessions without weekdays: what to do next (in order) or what was done.
+function sessionsGrid(list, empty) {
+  if (!list.length) return h('div', { class: 'card empty' }, empty);
   return h('div', { class: 'sessions' }, list.map((s) =>
-    h('div', { class: `session ${s.status}${s.day === todayIso ? ' today' : ''}`,
+    h('div', { class: `session ${s.status}`,
       style: s.status === 'Planned' ? `border-top-color:${/Long/.test(s.session) ? color(0) : /race|Race/.test(s.session) ? color(1) : /session|Threshold|Sharpener|Intervals/.test(s.session) ? color(3) : css('--grey')}` : null },
-    h('div', { class: 'day' }, h('span', {}, fDay(parse(s.day))), h('span', {}, s.adjusted ? h('span', { class: 'pill adj', title: s.reason }, 'coach') : s.status === 'Planned' ? '' : s.status)),
+    s.adjusted ? h('div', { class: 'day' }, h('span', { class: 'pill adj', title: s.reason }, 'eased')) : null,
     h('div', { class: 'name' }, s.session),
     s.km ? h('div', { class: 'km' }, `${s.km} km`) : null,
-    s.duration_min && s.status !== 'Done' ? h('div', { class: 'km' }, `${s.duration_min} min`) : null,
+    s.duration_min && (s.status !== 'Done' || !s.km) ? h('div', { class: 'km' }, `${s.duration_min} min`) : null,
     s.pace ? h('div', { class: 'pace' }, s.pace) : null,
     s.detail ? h('div', { class: 'detail' }, s.detail) : null,
-    s.adjusted && s.reason && s.status !== 'Rest' ? h('div', { class: 'detail adj-reason' }, `Coach: ${s.reason}`) : null)));
+    s.adjusted && s.reason ? h('div', { class: 'detail adj-reason' }, s.reason) : null)));
 }
 
 function periodSeg(onChange) {
@@ -94,10 +97,8 @@ function ring(score, colr, size = 168) {
 async function today() {
   const [p, cfg, fit, ol] = await Promise.all([load('plan', '/plan'), load('config', '/config'), load('fit84', '/fitness?days=84'), load('outlook', '/races/outlook').catch(() => ({ races: [] }))]);
   const t = cfg.today;
-  const r = p.readiness, tw = p.this_week, race = p.target_race, shape = p.shape;
-  const upcoming = [...tw.sessions, ...p.next_week].filter((s) => s.day >= t && s.status === 'Planned' && s.session !== 'Strength');
-  const todays = [...tw.sessions.filter((s) => s.day === t && s.status !== 'Rest'), ...upcoming.filter((s) => s.day > t).slice(0, 1)];
-  const pct = Math.min(100, Math.round((tw.done_km / (tw.target_km || 1)) * 100));
+  const r = p.readiness, race = p.target_race, shape = p.shape;
+  const next = p.next_7_days.todo.slice(0, 2), done7 = p.last_7_days.done_km, todo7 = p.next_7_days.todo_km;
   const form = fit.at(-1);
   const days = race ? Math.round((parse(race.day) - parse(t)) / 864e5) : null;
   const zc = zoneColor(r.zone);
@@ -119,14 +120,13 @@ async function today() {
             h('div', { class: 'bar' }, h('div', { style: `width:${c.score}%;background:${levelColor(c.level)}` })),
             h('div', { class: 'note', style: 'margin:2px 0 0' }, `Your normal: ${c.baseline}`)))))),
       h('div', { class: 'hero-side' },
-        h('div', { class: 'card' }, h('div', { class: 'label' }, 'Today and next up'),
-          todays.length ? todays.map((s) => h('div', { class: 'next' },
-            h('div', { class: 'note', style: 'margin:0' }, `${fDay(parse(s.day))}${s.status === 'Done' ? ' · done' : ''}`),
-            h('div', { class: 'next-name' }, s.session, s.km ? h('span', { class: 'muted' }, ` · ${s.km} km`) : null),
+        h('div', { class: 'card' }, h('div', { class: 'label' }, 'Next up'),
+          next.length ? next.map((s) => h('div', { class: 'next' },
+            h('div', { class: 'next-name' }, s.session, s.km ? h('span', { class: 'muted' }, ` · ${s.km} km`) : s.duration_min ? h('span', { class: 'muted' }, ` · ${s.duration_min} min`) : null),
             s.pace ? h('div', { class: 'note', style: 'margin:0' }, s.pace) : null)) : h('div', { class: 'note' }, 'Nothing planned.')),
-        h('div', { class: 'card' }, h('div', { class: 'label' }, 'This week'),
-          h('div', { class: 'big' }, `${tw.done_km}`, h('small', {}, ` / ${tw.target_km} km`)),
-          h('div', { class: 'progress' }, h('div', { style: `width:${pct}%` }))),
+        h('div', { class: 'card' }, h('div', { class: 'label' }, 'Running, last 7 days'),
+          h('div', { class: 'big' }, `${done7}`, h('small', {}, ' km')),
+          h('div', { class: 'note', style: 'margin:0' }, `${todo7} km planned for the next 7 days`)),
         form ? h('div', { class: 'card' }, h('div', { class: 'label' }, 'Form'),
           h('div', { class: 'big', style: `color:${form.zone === 'Neutral' ? css('--fg') : formColor(form.zone)}` }, form.form > 0 ? `+${form.form}` : form.form, h('small', {}, ` ${form.zone}`)),
           h('div', { class: 'note', style: 'margin:0' }, `Fitness ${form.fitness} · fatigue ${form.fatigue} · ramp ${form.ramp > 0 ? '+' : ''}${form.ramp}/wk`)) : null)),
@@ -193,94 +193,68 @@ async function overview() {
   timeChart(boxes.sleep, weekly.filter((w) => w.avg_sleep_h != null), { x: 'week', step: 'week', h: 160, yfmt: f1, bars: [{ key: 'avg_sleep_h', name: 'Avg sleep h', color: color(4), fmt: f1 }] });
 }
 
-// ---- coach panel ----
-state.coachChat = state.coachChat || [];
-async function coachPanel(onChange) {
-  const st = await api('/coach').catch(() => ({ enabled: false, suggestions: [], notes: [], checkins: [] }));
-  const actionText = (x) => ({ skip: 'Skip', shorten: `Shorten to ${x.km} km`, move: `Move to ${x.move_to ? d3.utcFormat('%a')(parse(x.move_to)) : '?'}`,
-    strength: x.duration_min ? `Strength · ${x.duration_min} min` : 'Skip strength',
-    replace: `${x.session}${x.km ? ` · ${x.km} km` : ''}${x.pace ? ` · ${x.pace}` : ''}` }[x.action] || x.action);
-  const pending = st.suggestions.filter((x) => x.status === 'pending');
-  const decided = st.suggestions.filter((x) => x.status !== 'pending').slice(0, 4);
-  const sugCard = (x) => h('div', { class: `proposal ${x.status}` },
-    h('div', {}, h('div', { class: 'next-name' }, `${fDay(parse(x.day))}: ${actionText(x)}`),
-      x.detail && ['replace', 'strength'].includes(x.action) ? h('div', { class: 'note', style: 'margin:2px 0' }, x.detail) : null,
-      h('div', { class: 'note', style: 'margin:2px 0 0' }, x.reason)),
-    x.status === 'pending' ? h('div', { class: 'row', style: 'margin:0;gap:6px' },
-      h('button', { class: 'primary', onclick: async (e) => {
-        const button = e.currentTarget;
-        button.disabled = true;
-        try { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'accepted' }) }); resetCache(); onChange(); }
-        catch (err) { button.disabled = false; alert(`This suggestion cannot be applied: ${err.message}`); }
-      } }, 'Accept'),
-      h('button', { class: 'link', onclick: async () => { await api(`/coach/suggestions/${x.id}`, { method: 'POST', body: JSON.stringify({ status: 'dismissed' }) }); onChange(); } }, 'Dismiss'))
-      : h('span', { class: 'note', style: 'margin:0' }, x.status === 'accepted' ? 'Accepted ✓' : 'Dismissed'));
-  const log = h('div', { class: 'chat-log' });
-  const render = () => { log.replaceChildren(...state.coachChat.map((m) => h('div', { class: `msg ${m.role}` }, h('div', { class: 'bubble' }, m.content)))); log.scrollTop = log.scrollHeight; };
-  const input = h('input', { placeholder: st.enabled ? 'How is it going? e.g. “calf is sore”, “travelling Thu–Sat”, “tempo felt easy”' : 'Coach not set up', disabled: st.enabled ? null : '' });
-  const send = h('button', { class: 'primary', type: 'submit', disabled: st.enabled ? null : '' }, 'Send');
-  const form = h('form', { class: 'chat-form', onsubmit: async (e) => {
-    e.preventDefault();
-    const text = input.value.trim(); if (!text) return;
-    state.coachChat.push({ role: 'user', content: text }); input.value = ''; send.disabled = true;
-    state.coachChat.push({ role: 'assistant', content: 'Looking at your training… (a local model can take a minute or two)', pending: true }); render();
+// ---- check-in ----
+const FEELINGS = [['good', 'Good'], ['tired', 'Tired'], ['sore', 'Sore'], ['ill', 'Ill'], ['travelling', 'Travelling']];
+const FEELING_RULES = { good: 'No change; ends an earlier check-in.', tired: 'Hard sessions become easy, runs 20% shorter, strength 30 min at most.',
+  sore: 'Hard sessions become easy, runs 30% shorter, no strength.', ill: 'Rest. Races stay, with a reminder to race only when symptom-free.',
+  travelling: 'Easy runs of 10 km at most, 20 min of bodyweight strength.' };
+const feelingName = (v) => FEELINGS.find(([k]) => k === v)?.[1] ?? 'Note';
+async function checkinCard(onChange) {
+  const st = await api('/checkins').catch(() => ({ active: null, recent: [] }));
+  const err = h('p', { class: 'note error', role: 'status' });
+  const rule = h('p', { class: 'note', style: 'margin:0' }, FEELING_RULES.tired);
+  const feeling = h('select', { name: 'feeling', onchange: () => { rule.textContent = FEELING_RULES[feeling.value]; } },
+    FEELINGS.map(([v, l]) => h('option', { value: v, selected: v === 'tired' ? '' : null }, l)));
+  const form = h('form', { class: 'goal-form', onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = '';
+    const d = Object.fromEntries(new FormData(form));
     try {
-      const out = await api('/coach/chat', { method: 'POST', body: JSON.stringify({ messages: state.coachChat.filter((m) => !m.pending).map(({ role, content }) => ({ role, content })) }) });
-      state.coachChat.pop(); state.coachChat.push({ role: 'assistant', content: out.reply });
-      if (out.suggestions.length) { onChange(); return; }
-    } catch (err) { state.coachChat.pop(); state.coachChat.push({ role: 'assistant', content: `Sorry — ${err.message}` }); }
-    send.disabled = false; render();
-  } }, input, send);
-  const review = h('button', { class: 'link', disabled: st.enabled && !st.review_running ? null : '', onclick: async () => {
-    review.disabled = true; review.textContent = 'Reviewing… (refresh in a few minutes)';
-    await api('/coach/review', { method: 'POST' }).catch(() => {});
-  } }, st.review_running ? 'Review running…' : 'Review my week now');
-  const lastNote = st.notes[0];
-  render();
-  return card('Coach', st.enabled ? `Adjusts the rule plan to how your training is going. Reviews automatically every Sunday evening. Model: ${st.model}.`
-    : 'Needs an LLM: set HC_LLM_PROVIDER in .env (see the README for local Ollama).', [
-    lastNote && !state.coachChat.length ? h('div', { class: 'coach-note' }, h('div', { class: 'label' }, `${lastNote.kind === 'review' ? 'Weekly review' : 'Last reply'} · ${d3.timeFormat('%a %H:%M')(new Date(lastNote.created_at))}`), lastNote.text) : null,
-    pending.length ? h('div', { class: 'label', style: 'margin-top:12px' }, `Suggested changes (${pending.length})`) : null,
-    ...pending.map(sugCard),
-    decided.length ? h('details', { style: 'margin-top:8px' }, h('summary', { class: 'note' }, 'Earlier suggestions'), ...decided.map(sugCard)) : null,
-    h('div', { style: 'height:10px' }), log, form,
-    h('div', { class: 'row', style: 'justify-content:space-between;margin:8px 0 0' },
-      h('span', { class: 'note', style: 'margin:0' }, st.checkins.length ? `Remembers ${st.checkins.length} recent check-in${st.checkins.length > 1 ? 's' : ''}.` : 'What you tell the coach is remembered as a check-in.'),
-      review),
+      await api('/checkins', { method: 'POST', body: JSON.stringify({ feeling: d.feeling, days: d.days ? Number(d.days) : null, note: d.note || '' }) });
+      resetCache(); onChange();
+    } catch (e2) { err.textContent = e2.message; }
+  } },
+  h('label', {}, h('span', {}, 'How do you feel?'), feeling),
+  h('label', {}, h('span', {}, 'For how many days'), h('input', { name: 'days', type: 'number', min: 1, max: 14, placeholder: 'default' })),
+  h('label', { style: 'flex:1;min-width:12rem' }, h('span', {}, 'Note (optional)'), h('input', { name: 'note', maxlength: 1000, placeholder: 'e.g. left calf tight' })),
+  h('button', { class: 'primary', type: 'submit' }, 'Save'));
+  const a = st.active;
+  const recent = st.recent.filter((c) => !a || c.id !== a.id).slice(0, 5);
+  const line = (c) => `${d3.utcFormat('%b %-d')(parse(c.day))} · ${feelingName(c.feeling)}${c.note ? ` · ${c.note}` : ''}`;
+  return card('Check-in', 'Tell the plan how you feel. Fixed rules ease the sessions for a few days; the newest check-in replaces older ones.', [
+    a ? h('div', { class: 'coach-note' }, h('div', { class: 'label' }, `Active until ${d3.utcFormat('%b %-d')(parse(a.until))}`), `${line(a)} — ${FEELING_RULES[a.feeling]}`) : null,
+    form, rule, err,
+    recent.length ? h('details', { style: 'margin-top:8px' }, h('summary', { class: 'note' }, 'Earlier check-ins'),
+      recent.map((c) => h('div', { class: 'note' }, line(c), ' ',
+        h('button', { class: 'link', onclick: async () => { await api(`/checkins/${c.id}`, { method: 'DELETE' }); resetCache(); onChange(); } }, 'Delete')))) : null,
   ]);
 }
 
 async function plan() {
-  const [p, cfg] = await Promise.all([load('plan', '/plan'), load('config', '/config')]);
+  const p = await load('plan', '/plan');
   const race = p.target_race;
-  const week = state.week || 'this';
   const first = p.race_plan[0];
   const head = race && first
     ? `${p.athlete_name}, you’re ${first.weeks_to_go} week${first.weeks_to_go === 1 ? '' : 's'} from ${race.name}, in the ${first.phase.toLowerCase()} phase.`
     : `${p.athlete_name}, no race yet — this keeps your fitness ticking over with one quality session a week.`;
-  const list = week === 'this' ? p.this_week.sessions : p.next_week;
   const roadBox = chartBox(260), tableBox = h('div', { class: 'tablebox' });
   show(
     h('h1', {}, 'Training plan'),
     h('p', { class: 'lede' }, head, ' ', `Readiness: ${p.readiness.status.toLowerCase()} (${p.readiness.reasons.join('; ')}).`),
-    h('div', { class: 'row' }, (() => {
-      const seg = h('div', { class: 'seg' });
-      for (const [k, label] of [['this', 'This week'], ['next', 'Next week']]) seg.append(h('button', { class: k === week ? 'on' : '', onclick: () => { state.week = k; plan(); } }, label));
-      return seg;
-    })(), week === 'this' ? h('span', { class: 'note', style: 'margin:0' }, `${p.this_week.done_km} km done of ~${p.this_week.target_km} km`) : null),
-    sessionsGrid(list, cfg.today),
-    p.inactive_suggestions?.length ? h('div', { class: 'banner bad' },
-      h('div', {}, h('b', {}, 'Some accepted coach changes no longer fit the current plan'),
-        p.inactive_suggestions.map((x) => h('p', { class: 'note' }, `${x.day}: ${x.reason}`)))) : null,
+    h('div', { class: 'row', style: 'justify-content:space-between' }, h('h2', { style: 'margin:0' }, 'To do · next 7 days'),
+      h('span', { class: 'note', style: 'margin:0' }, `~${p.next_7_days.todo_km} km of running, in this order. Fit them around your week.`)),
+    sessionsGrid(p.next_7_days.todo, 'Nothing planned for the next 7 days.'),
+    h('div', { class: 'row', style: 'justify-content:space-between;margin-top:24px' }, h('h2', { style: 'margin:0' }, 'Done · last 7 days'),
+      h('span', { class: 'note', style: 'margin:0' }, `${p.last_7_days.done_km} km of running`)),
+    sessionsGrid(p.last_7_days.done, 'Nothing recorded in the last 7 days.'),
     h('div', { style: 'height:16px' }),
-    await coachPanel(() => { resetCache(); plan(); }),
+    await checkinCard(plan),
     race ? h('h2', {}, 'Road to race day') : null,
     race ? card('Weekly distance', 'Grey: what you actually ran. Colour: the plan by phase. Line: long run.', [
       h('div', { class: 'legend' }, ['Base', 'Build', 'Peak', 'Taper', 'Race week'].map((x) => h('span', {}, h('span', { class: 'sw', style: `background:${phaseColor(x)}` }), x))),
       roadBox]) : null,
     race ? h('div', { style: 'height:16px' }) : null,
     race ? card('Week by week', 'Every fourth week is easier; B and C races reshape their week.', tableBox) : null,
-    h('p', { class: 'note' }, 'The rules set the backbone; the coach (if enabled) only suggests day-by-day changes within safe limits. Skip or shorten anything if you feel run-down or sore.'),
+    h('p', { class: 'note' }, 'Everything here comes from fixed rules: your recent training, readiness, races and check-ins. Skip or shorten anything if you feel run-down or sore.'),
   );
   if (race) {
     timeChart(roadBox, p.road, { x: 'week', step: 'week', h: 260, yfmt: f1,
@@ -302,7 +276,7 @@ const verdictPill = (o) => (o?.verdict ? h('span', { class: `verdict ${verdictCl
 const gapT = (s) => (s < 60 ? `${Math.round(s)} s` : clockT(s));
 const gapText = (o) => (o.gap_s == null ? null : o.gap_s <= 0 ? `${gapT(-o.gap_s)} faster than goal` : `${gapT(o.gap_s)} (${(o.gap_pct * 100).toFixed(1)}%) slower than goal`);
 
-function outlookCard(o, llmOn, onChange) {
+function outlookCard(o) {
   const fact = (label, value, sub) => h('div', { class: 'fact' }, h('div', { class: 'label' }, label), h('div', { class: 'fact-v' }, value), sub ? h('div', { class: 'note', style: 'margin:0' }, sub) : null);
   const b = o.best_effort;
   const facts = h('div', { class: 'facts' },
@@ -311,27 +285,19 @@ function outlookCard(o, llmOn, onChange) {
     fact('Best recent run', b ? `${b.km} km · ${pace(b.pace_s)} /km` : '—', b ? `${d3.utcFormat('%b %-d')(parse(b.day))} · ≈ ${clockT(b.equivalent_s)} for the race` : 'Last 8 weeks'),
     o.goal_pace_s ? fact('At goal pace', `${o.goal_pace_km_4w} km`, `Last 4 weeks · ${o.runs_4w} runs`) : null,
     fact('Endurance shape', `${o.shape.pct}%`, `${o.shape.weekly_km} of ${o.shape.weekly_target} km/week`));
-  const ins = o.insight;
-  const out = h('div', { class: 'coach-note', style: ins ? null : 'display:none' }, ins ? [h('div', { class: 'label' }, `Coach’s reading · ${ins.today ? 'today' : d3.utcFormat('%b %-d')(parse(ins.day))}`), ins.text] : null);
-  const btn = h('button', { class: 'link', onclick: async () => {
-    btn.disabled = true; btn.textContent = 'Thinking… (a local model can take a minute or two)';
-    try { await api(`/races/${o.race_id}/outlook`, { method: 'POST', body: JSON.stringify({ force: !!ins?.today }) }); onChange(); }
-    catch (e) { btn.disabled = false; btn.textContent = `Failed: ${e.message}`; }
-  } }, ins?.today ? 'Ask again' : 'Ask the coach to explain');
+  const sum = o.summary;
+  const reading = sum ? h('div', { class: 'coach-note' }, h('div', { class: 'label' }, 'Reading'), sum.text,
+    h('ul', { class: 'fuel' }, sum.focus.map((f) => h('li', {}, f)))) : null;
   return h('div', { class: 'card outlook' },
     h('div', { class: 'row', style: 'justify-content:space-between;margin:0 0 4px' },
       h('h3', {}, o.race, ' ', h('span', { class: `pill ${o.priority}` }, o.priority)), verdictPill(o)),
     h('p', { class: 'note' }, `${d3.utcFormat('%a %b %-d')(parse(o.day))} · ${+o.distance_km.toFixed(1)} km · ${o.weeks_to_go} weeks to go${gapText(o) ? ` · ${gapText(o)}` : ''}`),
     facts,
-    o.goal_time_s ? [out, llmOn ? h('div', { style: 'margin-top:8px' }, btn) : h('p', { class: 'note' }, 'Turn on the local AI (HC_LLM_PROVIDER) for a written explanation.')]
-      : h('p', { class: 'note' }, 'Add a goal time (Edit) to see whether you’re on track for it.'));
+    reading || h('p', { class: 'note' }, 'Add a goal time (Edit) to see whether you’re on track for it.'));
 }
 
-// ---- race assistant chat ----
-state.chat = state.chat || [];
-function assistantCard(list, status) {
-  const log = h('div', { class: 'chat-log' });
-  const fmtGoal = (g) => g || '—';
+// ---- races via Claude ----
+function raceClaudeCard(list) {
   const proposalCard = (p) => {
     const existing = p.race_id ? list.find((r) => r.id === p.race_id) : null;
     const btn = h('button', { class: 'primary', onclick: async () => {
@@ -340,46 +306,23 @@ function assistantCard(list, status) {
         const body = { name: p.name, date: p.date, distance_km: Number(p.distance_km), goal_time: p.goal_time || null, priority: p.priority || 'A',
           notes: [p.location, p.start_time && `start ${p.start_time}`, p.notes, p.source_url].filter(Boolean).join(' · ') || null };
         await api(existing ? `/races/${existing.id}` : '/races', { method: existing ? 'PUT' : 'POST', body: JSON.stringify(body) });
-        p.saved = true; resetCache(); races();
+        resetCache(); races();
       } catch (e) { btn.disabled = false; btn.textContent = `Failed: ${e.message}`; }
-    } }, p.saved ? 'Saved ✓' : existing ? 'Update race' : 'Add to calendar');
-    if (p.saved) btn.disabled = true;
+    } }, existing ? 'Update race' : 'Add to calendar');
     return h('div', { class: 'proposal' },
       h('div', {}, h('div', { class: 'next-name' }, p.name),
-        h('div', { class: 'note', style: 'margin:2px 0' }, `${d3.utcFormat('%a %b %-d, %Y')(parse(p.date))} · ${+Number(p.distance_km).toFixed(2)} km · goal ${fmtGoal(p.goal_time)} · priority ${p.priority}`),
+        h('div', { class: 'note', style: 'margin:2px 0' }, `${d3.utcFormat('%a %b %-d, %Y')(parse(p.date))} · ${+Number(p.distance_km).toFixed(2)} km · goal ${p.goal_time || '—'} · priority ${p.priority}`),
         p.location || p.start_time ? h('div', { class: 'note', style: 'margin:0' }, [p.location, p.start_time && `start ${p.start_time}`].filter(Boolean).join(' · ')) : null,
         p.source_url ? h('a', { href: p.source_url, target: '_blank', rel: 'noopener', class: 'note' }, 'Source') : null),
       btn);
   };
-  const render = () => {
-    log.replaceChildren(...state.chat.map((m) => h('div', { class: `msg ${m.role}` },
-      h('div', { class: 'bubble' }, m.content),
-      ...(m.proposals || []).map(proposalCard),
-      m.sources?.length ? h('div', { class: 'sources' }, 'Sources: ', ...m.sources.slice(0, 3).flatMap((s, i) => [i ? ' · ' : '', h('a', { href: s.url, target: '_blank', rel: 'noopener' }, s.title)])) : null)));
-    log.scrollTop = log.scrollHeight;
-  };
-  const input = h('input', { placeholder: status.enabled ? 'e.g. “Add Corrida do Sporting, I want 49 minutes”' : 'Assistant not set up', disabled: status.enabled ? null : '' });
-  const send = h('button', { class: 'primary', type: 'submit', disabled: status.enabled ? null : '' }, 'Send');
-  const formEl = h('form', { class: 'chat-form', onsubmit: async (e) => {
-    e.preventDefault();
-    const text = input.value.trim(); if (!text) return;
-    state.chat.push({ role: 'user', content: text }); input.value = ''; send.disabled = true;
-    state.chat.push({ role: 'assistant', content: 'Searching and reading the race page… (a local model can take a minute or two)', pending: true }); render();
-    try {
-      const out = await api('/assistant/chat', { method: 'POST', body: JSON.stringify({ messages: state.chat.filter((m) => !m.pending).map(({ role, content }) => ({ role, content })) }) });
-      state.chat.pop(); state.chat.push({ role: 'assistant', content: out.reply, proposals: out.proposals, sources: out.sources });
-    } catch (err) { state.chat.pop(); state.chat.push({ role: 'assistant', content: `Sorry — ${err.message}` }); }
-    send.disabled = false; render(); input.focus();
-  } }, input, send);
-  if (!state.chat.length) state.chat.push({ role: 'assistant', content: status.enabled
-    ? 'Tell me about a race — name, and your goal time if you have one. I’ll look up the date and distance and show it here for you to add.'
-    : 'The race assistant needs an LLM. Set HC_LLM_PROVIDER in your .env (see the README: local Ollama + SearXNG) and restart the app. You can still use the form below.' });
-  render();
-  return card('Race assistant', `Searches the web and reads the race page${status.enabled ? ` (model: ${status.model})` : ''}. Nothing is saved until you click Add. A local model can take a minute or two.`, [log, formEl]);
+  return card('Add a race with Claude', 'Describe the race, copy the prompt into Claude (with web search on), then paste its answer back. Nothing is saved until you click Add.',
+    claudeHandoff({ h, api, promptPath: '/races/prompt', importPath: '/races/import', renderProposal: proposalCard,
+      placeholder: 'e.g. Lisbon Half Marathon, goal 1:45:00' }));
 }
 
 async function races() {
-  const [list, status, ol] = await Promise.all([api('/races'), api('/assistant').catch(() => ({ enabled: false })), api('/races/outlook').catch(() => ({ races: [] }))]);
+  const [list, ol] = await Promise.all([api('/races'), api('/races/outlook').catch(() => ({ races: [] }))]);
   const form = h('form', { class: 'race', onsubmit: async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
@@ -409,9 +352,9 @@ async function races() {
     h('p', { class: 'lede' }, 'Your training plan is built around these. A = main race (full build and taper), B = tune-up (mini-taper, easy days after), C = training race (replaces that week’s hard session).'),
     ol.races.length ? [h('h2', { style: 'margin-top:0' }, 'Am I on track?'),
       h('p', { class: 'note' }, 'Your goal pace against what your watch predicts and what your recent runs show. Verdicts: on track, within reach (≤2% off), stretch (≤5%), ambitious.'),
-      h('div', { class: 'stack' }, ol.races.map((o) => outlookCard(o, ol.llm, () => { resetCache(); races(); }))),
+      h('div', { class: 'stack' }, ol.races.map(outlookCard)),
       h('div', { style: 'height:24px' })] : null,
-    assistantCard(list, status),
+    raceClaudeCard(list),
     h('div', { style: 'height:16px' }),
     card('Add a race manually', null, form),
     h('h2', {}, 'Upcoming'),
@@ -599,12 +542,12 @@ async function resyncWatch() {
   el.replaceChildren(h('div', { class: `banner${st.error || partial ? ' bad' : ''}` },
     h('div', {}, h('b', {}, st.error ? 'Full resync failed' : partial ? 'Full resync finished with issues' : 'Full resync finished'),
       h('div', { class: 'note', style: 'margin:2px 0 0' }, st.error ? st.error
-        : `${st.stats ? `${s.activities_seen ?? 0} activities (${s.activities_new ?? 0} new) and ${s.days ?? 0} days of health data.` : 'FIT inbox checked; no provider data synced.'} Training plan rebuilt.${st.stages?.coach === 'completed' ? ` Coach review complete: ${st.coach_suggestions} new recommendation(s).` : ''}`),
+        : `${st.stats ? `${s.activities_seen ?? 0} activities (${s.activities_new ?? 0} new) and ${s.days ?? 0} days of health data.` : 'FIT inbox checked; no provider data synced.'} Training plan rebuilt.`),
       (st.warnings || []).map((warning) => h('p', { class: 'note' }, warning))),
     h('button', { class: 'link', onclick: () => el.replaceChildren() }, 'Dismiss')));
 }
 $('#resync').addEventListener('click', async () => {
-  if (!confirm('Run a full resync?\n\nThis re-reads your history, rebuilds the training plan and runs a fresh coach review and race outlooks when AI is enabled. Pending recommendations are replaced after a successful review; accepted changes and check-ins are kept. It can take a few minutes.')) return;
+  if (!confirm('Run a full resync?\n\nThis re-reads your history and rebuilds the training plan. Races and check-ins are kept. It can take a few minutes.')) return;
   try { await api('/resync', { method: 'POST' }); state.resyncSeen = true; resyncWatch(); }
   catch (e) { $('#notice').replaceChildren(h('div', { class: 'banner bad' }, h('div', {}, h('b', {}, 'Couldn’t start the resync'), h('div', { class: 'note' }, e.message)))); }
 });
